@@ -182,6 +182,29 @@ def test_stop_with_empty_queue_emits_nothing_and_cleans_up(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
+def test_systemMessage_always_starts_with_newline(monkeypatch, capsys):
+    """Regression pin: emitted systemMessage MUST start with '\\n'.
+
+    Claude Code's TUI prepends a 'Stop says:' banner to the systemMessage,
+    rendering it on the same row. Without a leading newline, the box's
+    first row sits next to the banner and every subsequent row is shifted,
+    breaking the visual alignment. The leading newline forces the box to
+    start on its own clean row. Empirically caught in v0.1.1 production
+    use and fixed in v0.1.2; this test pins the behaviour so it doesn't
+    regress.
+    """
+    _write_menu_file("some menu content\n")
+    _invoke_main(monkeypatch, "Stop")
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    assert parsed["systemMessage"].startswith("\n"), (
+        "systemMessage must start with '\\n' so the menu box renders on "
+        "its own line under Claude Code's 'Stop says:' banner. Without "
+        "this prefix the first row of the box is shifted right and "
+        "every subsequent row breaks alignment."
+    )
+
+
 @pytest.mark.parametrize("event", ["Stop", "StopFailure"])
 def test_stop_event_with_one_small_menu_emits_intact(monkeypatch, capsys, event):
     """Stop / StopFailure with one ~300-char menu: JSON emitted with full body, queue empty after."""
@@ -194,8 +217,11 @@ def test_stop_event_with_one_small_menu_emits_intact(monkeypatch, capsys, event)
     out = capsys.readouterr().out
     parsed = json.loads(out)
     assert "systemMessage" in parsed
-    # Whole menu body must be present verbatim (small path, no truncation).
-    assert parsed["systemMessage"] == body
+    # Whole menu body must be present verbatim, prefixed with one newline
+    # so the box starts on its own line under Claude Code's "Stop says:"
+    # banner (without the leading \n, the first row sits on the same row
+    # as the banner and shifts every subsequent line).
+    assert parsed["systemMessage"] == "\n" + body
     # File was consumed.
     assert not menu_path.exists()
 

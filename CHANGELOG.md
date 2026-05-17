@@ -5,6 +5,22 @@ All notable changes to **claude-menu-system** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-05-17
+
+### Fixed
+
+- **Critical UX bug** — emitted `systemMessage` now prepends a `\n` so
+  the menu box starts on its own line beneath Claude Code's `Stop says:`
+  banner. v0.1.1 emitted the box's first row inline with the banner,
+  shifting every subsequent row right and breaking visual alignment.
+  Regression-pinned by `test_systemMessage_always_starts_with_newline`.
+- **render-menu skill body** — rewritten to NOT rely on the
+  `$ARGUMENTS` placeholder (slash-command syntax, not skill syntax).
+  The haiku fork now receives explicit instructions to take the user
+  message as the path and invoke the Bash tool with it. v0.1.1's
+  body left the fork describing what it would do rather than actually
+  executing the script.
+
 ## [0.1.1] — 2026-05-17
 
 ### Added

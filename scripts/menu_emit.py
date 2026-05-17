@@ -214,7 +214,11 @@ def _handle_emit_event(payload: dict[str, Any]) -> int:
         if not payload_text:
             cleanup_empty_session_dir(sid)
             return 0
-        out = json.dumps({"systemMessage": payload_text})
+        # Prepend a newline so the menu starts on its own line in the
+        # terminal. Without this, Claude Code's TUI displays the box on
+        # the same row as its "Stop says:" prefix, shifting the first
+        # row right and breaking the box's alignment for the reader.
+        out = json.dumps({"systemMessage": "\n" + payload_text})
         print(out)
         for f in files_to_delete:
             remove_menu(f)
