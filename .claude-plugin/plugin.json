@@ -1,0 +1,14 @@
+{
+  "name": "claude-menu-system",
+  "version": "0.1.0",
+  "description": "Universal terminal-menu system for Claude Code plugins. A haiku fork renders a menu spec to a tempfile, then a Stop hook emits it as systemMessage at main-session turn end — the menu appears in the user terminal exactly when the user can type a reply, without burning opus tokens on copy-into-prose.",
+  "author": {
+    "name": "Emanuele Sabetta",
+    "url": "https://github.com/Emasoft"
+  },
+  "homepage": "https://github.com/Emasoft/claude-menu-system",
+  "repository": "https://github.com/Emasoft/claude-menu-system",
+  "license": "MIT",
+  "keywords": ["menu", "tui", "rendering", "ansi", "hooks", "universal", "skill"],
+  "hooks": "./hooks/hooks.json"
+}

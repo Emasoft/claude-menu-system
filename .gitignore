@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv-cache/
+build/
+dist/
+
+# Test artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editor + OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Plugin dev folders (per CLAUDE.md RULE 0.2)
+docs_dev/
+scripts_dev/
+samples_dev/
+examples_dev/
+tests_dev/
+downloads_dev/
+libs_dev/
+builds_dev/
+reports_dev/
+
+# Reports (private data — never commit)
+/reports/
+
+# Trashcan (ai-maestro-janitor) — gitkeep + README markers are tracked
+.trashcan/*
+!.trashcan/.gitkeep
+!.trashcan/README.txt

@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub release + notify marketplace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version match (plugin.json + pyproject.toml + tag)
+        env:
+          TAG_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          PLUGIN_VER=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          PYPROJECT_VER=$(python3 -c "
+          import tomllib
+          print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])
+          ")
+          if [ "$PLUGIN_VER" != "$TAG_VERSION" ] || [ "$PYPROJECT_VER" != "$TAG_VERSION" ]; then
+            echo "version mismatch: tag=$TAG_VERSION plugin=$PLUGIN_VER pyproject=$PYPROJECT_VER" >&2
+            exit 1
+          fi
+          echo "all three versions match: $TAG_VERSION"
+
+      - name: Extract changelog section for this version
+        id: changelog
+        env:
+          TAG_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          ver = os.environ['TAG_VERSION']
+          text = open('CHANGELOG.md').read()
+          # Match "## [X.Y.Z] — date" up to the next "## [" or EOF.
+          pattern = rf'## \[{re.escape(ver)}\][^\n]*\n+(.*?)(?=\n## \[|\Z)'
+          m = re.search(pattern, text, re.DOTALL)
+          body = m.group(1).strip() if m else f"Release v{ver}"
+          # Multi-line GitHub-Actions output via delimiter.
+          print(f"body<<EOF_CHANGELOG")
+          print(body)
+          print("EOF_CHANGELOG")
+          PY
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$BODY"
+
+      - name: Check marketplace PAT availability
+        id: pat
+        env:
+          MARKETPLACE_PAT: ${{ secrets.MARKETPLACE_PAT }}
+        run: |
+          if [ -n "$MARKETPLACE_PAT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::MARKETPLACE_PAT secret not set — marketplace notification skipped"
+          fi
+
+      - name: Notify emasoft-plugins marketplace
+        if: steps.pat.outputs.available == 'true'
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v4.0.1
+        with:
+          token: ${{ secrets.MARKETPLACE_PAT }}
+          repository: Emasoft/emasoft-plugins
+          event-type: plugin-published
+          client-payload: |
+            {
+              "plugin":  "claude-menu-system",
+              "version": "${{ steps.ver.outputs.version }}",
+              "tag":     "${{ steps.ver.outputs.tag }}",
+              "repo":    "${{ github.repository }}",
+              "sha":     "${{ github.sha }}"
+            }
