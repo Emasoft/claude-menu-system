@@ -1,6 +1,7 @@
 # claude-menu-system
 
 <!--BADGES-START-->
+[![version](https://img.shields.io/badge/version-0.1.4-blue)](https://github.com/Emasoft/claude-menu-system/releases)
 [![CI](https://github.com/Emasoft/claude-menu-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Emasoft/claude-menu-system/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Emasoft/claude-menu-system?label=release)](https://github.com/Emasoft/claude-menu-system/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
