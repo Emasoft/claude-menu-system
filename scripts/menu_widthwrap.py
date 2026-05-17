@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Display-width measurement, ANSI-safe wrapping, terminal-width detection.
 
 Three responsibilities, kept in one module because they all depend on

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Helper script — build canonical demo specs to a JSON file.
 
 Used by the `/menu-test` command to produce a deterministic demo spec

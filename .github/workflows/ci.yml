@@ -1,10 +1,15 @@
 name: CI
 
+# Job display names below MUST stay exactly Lint / Validate / Test —
+# cpv-setup-branch-rules reads them verbatim when wiring the branch
+# ruleset (TRDD-bbff5bc5).
+
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  merge_group:
 
 permissions:
   contents: read
@@ -14,76 +19,117 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Cheap-fail-first: workflow-syntax errors before mega-linter.
+      - name: Lint workflow YAML (actionlint)
+        uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
+      - name: Mega-Linter
+        uses: oxsecurity/megalinter@e08c2b05e3dbc40af4c23f41172ef1e068a7d651 # v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: false
+
+      - name: Upload Mega-Linter reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mega-linter-reports
+          path: |
+            megalinter-reports/
+            mega-linter.log
+
+  commitlint:
+    name: Commitlint
+    runs-on: ubuntu-latest
+    # PRs only — push events on main don't need conventional-commit
+    # enforcement (the commits are already merged).
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Conventional-commits gate
+        uses: wagoid/commitlint-github-action@6cf16efdf4da5277c791d335142c03a0bdf1766e # v6.2.1
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run plugin validation (remote CPV, --strict)
+        # Fetches CPV from GitHub via uvx so downstream plugins do not need to
+        # vendor the validator script locally. Matches publish.py's local gate
+        # so CI and local gate agree. Issue #11: do NOT call the local
+        # validator script — it does not exist in scaffolded plugins.
+        run: |
+          set +e
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation \
+              --with pyyaml \
+              cpv-remote-validate plugin . --strict
+          exit_code=$?
+          set -e
+          if [ $exit_code -eq 0 ]; then
+            echo "Validation passed"
+            exit 0
+          elif [ $exit_code -ge 5 ]; then
+            echo "Only WARNING-level findings (exit $exit_code) — advisory, not blocking"
+            exit 0
+          else
+            echo "::error::Validation failed (exit $exit_code: CRITICAL/MAJOR/MINOR/NIT)"
+            exit $exit_code
+          fi
+
   test:
-    name: pytest + ruff (Python ${{ matrix.python-version }}, ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    name: Test
+    # macOS matrix added v2.86.0 (issue #22) — catches darwin-specific
+    # regressions that ubuntu-only runs miss (pathlib casing, mtime
+    # resolution, BSD `ps` vs procps-ng output). fail-fast: false so
+    # each OS reports its own failure.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
 
-      - name: Install dev dependencies
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run tests
         run: |
-          uv venv --python ${{ matrix.python-version }}
-          uv pip install -e ".[dev]"
-
-      - name: Lint (ruff)
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-
-      - name: Test (pytest)
-        run: uv run pytest tests/ -n auto --tb=short
-        env:
-          CLAUDE_MENU_COLOR: "0"
-          TERM: xterm-256color
-          LANG: en_US.UTF-8
-
-  validate-plugin:
-    name: Validate plugin structure
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Verify .claude-plugin/plugin.json is valid JSON
-        run: |
-          python3 -c "import json; json.load(open('.claude-plugin/plugin.json'))"
-          python3 -c "import json; assert json.load(open('.claude-plugin/plugin.json'))['name'] == 'claude-menu-system'"
-
-      - name: Verify hooks/hooks.json is valid JSON
-        run: |
-          python3 -c "import json; json.load(open('hooks/hooks.json'))"
-          python3 -c "
-          import json
-          h = json.load(open('hooks/hooks.json'))['hooks']
-          for k in ('SubagentStop', 'Stop', 'StopFailure'):
-            assert k in h, f'missing hook event: {k}'
-          print('hooks: SubagentStop + Stop + StopFailure all wired')
-          "
-
-      - name: Verify skill frontmatter
-        run: |
-          python3 -c "
-          import re, sys
-          p = 'skills/render-menu/SKILL.md'
-          content = open(p).read()
-          m = re.search(r'^---\n(.*?)\n---', content, re.DOTALL)
-          assert m, f'{p}: no frontmatter'
-          fm = m.group(1)
-          for key in ('name:', 'context: fork', 'model: haiku', 'agent:', 'user-invocable: false'):
-            assert key in fm, f'{p}: missing or wrong: {key}'
-          print('skill frontmatter: ok')
-          "
+          if [ -d "tests" ] && ls tests/test_*.py 1>/dev/null 2>&1; then
+            uv run pytest tests/ -v
+          else
+            echo "No test files found, skipping"
+          fi

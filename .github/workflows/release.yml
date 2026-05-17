@@ -3,98 +3,118 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
-
-permissions:
-  contents: write
+      - 'v*.*.*'
 
 jobs:
   release:
-    name: Create GitHub release + notify marketplace
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Extract version from tag
-        id: ver
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Install uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
 
-      - name: Verify version match (plugin.json + pyproject.toml + tag)
-        env:
-          TAG_VERSION: ${{ steps.ver.outputs.version }}
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run full plugin validation (remote CPV, --strict)
+        # Fetches CPV from GitHub so downstream plugins do not need to vendor
+        # the validator script locally. Matches publish.py's local gate and the
+        # CI validate job. --strict blocks on CRITICAL/MAJOR/MINOR/NIT (exit
+        # codes 1-4); WARNING (exit 5+) is advisory only.
+        # Issue #11: removed local-validator invocation.
         run: |
-          PLUGIN_VER=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-          PYPROJECT_VER=$(python3 -c "
-          import tomllib
-          print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])
-          ")
-          if [ "$PLUGIN_VER" != "$TAG_VERSION" ] || [ "$PYPROJECT_VER" != "$TAG_VERSION" ]; then
-            echo "version mismatch: tag=$TAG_VERSION plugin=$PLUGIN_VER pyproject=$PYPROJECT_VER" >&2
-            exit 1
+          set +e
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation               --with pyyaml               cpv-remote-validate plugin . --strict               > validation-report.txt 2>&1
+          exit_code=$?
+          set -e
+          cat validation-report.txt
+          if [ $exit_code -ge 1 ] && [ $exit_code -le 4 ]; then
+            echo "::error::Validation failed with exit code $exit_code (CRITICAL/MAJOR/MINOR/NIT found)"
+            exit $exit_code
           fi
-          echo "all three versions match: $TAG_VERSION"
 
-      - name: Extract changelog section for this version
-        id: changelog
-        env:
-          TAG_VERSION: ${{ steps.ver.outputs.version }}
+      - name: Run tests
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os, re
-          ver = os.environ['TAG_VERSION']
-          text = open('CHANGELOG.md').read()
-          # Match "## [X.Y.Z] — date" up to the next "## [" or EOF.
-          pattern = rf'## \[{re.escape(ver)}\][^\n]*\n+(.*?)(?=\n## \[|\Z)'
-          m = re.search(pattern, text, re.DOTALL)
-          body = m.group(1).strip() if m else f"Release v{ver}"
-          # Multi-line GitHub-Actions output via delimiter.
-          print(f"body<<EOF_CHANGELOG")
-          print(body)
-          print("EOF_CHANGELOG")
-          PY
+          if [ -d "tests" ]; then
+            uv run pytest tests/ -v
+          fi
 
-      - name: Create GitHub release
+      - name: Lint Python scripts
+        run: uv run ruff check scripts/
+
+      - name: Type check
+        run: uv run mypy scripts/ --ignore-missing-imports
+
+      - name: Generate changelog
+        id: changelog
+        # v2.86.0 hardening (issue #22): extract ONLY the matching
+        # ``## [X.Y.Z] — YYYY-MM-DD`` block from CHANGELOG.md instead of
+        # uploading the entire file. The release body should be the
+        # release-specific notes, not the whole project history.
+        # Fallback chain:
+        #   1. CHANGELOG.md ## [version] section (curated, em-dash separator)
+        #   2. CHANGELOG.md ## [version] section (legacy hyphen separator)
+        #   3. Full CHANGELOG.md (when no section header matches)
+        #   4. Auto-generated git log (when no CHANGELOG.md at all)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          # Strip leading 'v' so v1.2.3 matches ## [1.2.3] — ...
+          VERSION="${TAG#v}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            GITLOG=$(git log --pretty=format:"- %s (%h)" HEAD)
+          else
+            GITLOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG..HEAD")
+          fi
+          if [ -f "CHANGELOG.md" ]; then
+            # Extract the section header through the next ## or EOF. Try
+            # em-dash (canonical) first, then legacy hyphen. awk prints
+            # the block bounded by the matching header and the NEXT
+            # `## ` at column 0 (or EOF).
+            SECTION=$(awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\] [—-] " {found=1; print; next}
+              found && /^## / {exit}
+              found {print}
+            ' CHANGELOG.md)
+            if [ -n "$SECTION" ]; then
+              printf '%s\n' "$SECTION" > changelog.txt
+              echo "::notice::Release body extracted from CHANGELOG.md section for $VERSION"
+            else
+              echo "::warning::No CHANGELOG.md section matched ## [$VERSION] — falling back to full CHANGELOG.md"
+              cp CHANGELOG.md changelog.txt
+            fi
+          else
+            echo "$GITLOG" > changelog.txt
+          fi
+          echo "changelog_file=changelog.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release (idempotent)
+        # Idempotent shell flow — replaces the `softprops/action-gh-release`
+        # action which 422s when publish.py's Gate-13 already created the
+        # release locally. Pattern: `gh release view` to detect existence,
+        # then `gh release edit` (with --notes-file fallback to existing body)
+        # OR `gh release create` (when not pre-existing). Both branches
+        # upload the validation-report artifact.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.ver.outputs.tag }}
-          BODY: ${{ steps.changelog.outputs.body }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "$BODY"
-
-      - name: Check marketplace PAT availability
-        id: pat
-        env:
-          MARKETPLACE_PAT: ${{ secrets.MARKETPLACE_PAT }}
-        run: |
-          if [ -n "$MARKETPLACE_PAT" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
+          set -e
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — editing in place"
+            gh release edit "$TAG"               --notes-file changelog.txt               --verify-tag
+            gh release upload "$TAG" validation-report.txt --clobber
           else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::MARKETPLACE_PAT secret not set — marketplace notification skipped"
+            echo "Release $TAG does not exist yet — creating"
+            gh release create "$TAG" validation-report.txt               --title "$TAG"               --notes-file changelog.txt               --verify-tag
           fi
-
-      - name: Notify emasoft-plugins marketplace
-        if: steps.pat.outputs.available == 'true'
-        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
-        with:
-          token: ${{ secrets.MARKETPLACE_PAT }}
-          repository: Emasoft/emasoft-plugins
-          event-type: plugin-published
-          client-payload: |
-            {
-              "plugin":  "claude-menu-system",
-              "version": "${{ steps.ver.outputs.version }}",
-              "tag":     "${{ steps.ver.outputs.tag }}",
-              "repo":    "${{ github.repository }}",
-              "sha":     "${{ github.sha }}"
-            }

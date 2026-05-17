@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Semantic ANSI color palette + terminal-capability detection.
 
 Why a separate module: every other module (renderer, emit, write) needs

@@ -1,4 +1,5 @@
 ---
+name: menu-render
 description: Render a menu from a JSON spec file (ad-hoc — useful for testing your own plugin's menu specs without integrating yet).
 argument-hint: <path-to-spec.json>
 allowed-tools: Bash(python3:*)

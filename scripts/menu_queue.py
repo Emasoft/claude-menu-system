@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Queue path resolution + session ID lookup + concurrent-write safety.
 
 The queue is one directory per session, holding one file per queued menu:

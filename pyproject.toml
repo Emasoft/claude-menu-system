@@ -19,6 +19,11 @@ dev = [
   "pytest>=8.0",
   "pytest-xdist>=3.6",
   "ruff>=0.5",
+  # mypy required by the canonical CPV CI pipeline's `uv sync --extra dev` step —
+  # CI runs `uv run mypy` against scripts/. Without this, the workflow crashes
+  # with "Failed to spawn: mypy" on first push (per standardize_plugin v2.87.1
+  # [ACTION REQUIRED] alert).
+  "mypy>=1.19.1",
 ]
 
 [project.urls]

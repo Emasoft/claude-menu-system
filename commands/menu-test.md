@@ -1,4 +1,5 @@
 ---
+name: menu-test
 description: Run the claude-menu-system self-test — renders a demo menu so you can verify the plugin is wired correctly. Use after install or after upgrading.
 allowed-tools: Bash(python3:*)
 ---

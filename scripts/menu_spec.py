@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """JSON spec schema + validator for the menu system.
 
 A spec is a dict with required top-level fields:

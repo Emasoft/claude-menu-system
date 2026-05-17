@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Core renderer — turns a validated spec into a Unicode-bordered string.
 
 Ports the four modes that originated in CPV's ``format_menu.py``

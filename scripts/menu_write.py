@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Public API for the render-menu skill body.
 
 The haiku-fork skill body invokes this script with one argument — the

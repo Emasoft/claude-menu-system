@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Hook script — emits queued menus as systemMessage at Stop/StopFailure.
 
 Wired by ``hooks/hooks.json`` to:
@@ -239,5 +240,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def _cli_entry() -> None:
+    """CLI entry point — wraps main() so the sys.exit call lives inside
+    a function body, not at module scope.
+
+    Why: CPV's validate_hook.py flags module-scope sys.exit() because it
+    would kill the hook process at import time. The `if __name__ == "__main__":`
+    guard means the call only fires on direct invocation, never on import —
+    but the AST detector cannot tell the difference (it treats every If
+    block at module scope as import-time-reachable). Moving sys.exit into
+    a function body satisfies the rule without changing behaviour.
+    """
     sys.exit(main(sys.argv))
+
+
+if __name__ == "__main__":
+    _cli_entry()

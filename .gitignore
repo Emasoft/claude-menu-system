@@ -37,3 +37,16 @@ reports_dev/
 .trashcan/*
 !.trashcan/.gitkeep
 !.trashcan/README.txt
+
+# Added by CPV standardize
+.claude/
+.tldr/
+llm_externalizer_output/
+*_dev/
+.env
+.ruff_cache/
+.mypy_cache/
+node_modules/
+
+# ai-maestro-janitor logs (per-session, machine-local)
+.janitor/

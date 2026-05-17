@@ -1,8 +1,10 @@
 # claude-menu-system
 
+<!--BADGES-START-->
 [![CI](https://github.com/Emasoft/claude-menu-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Emasoft/claude-menu-system/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Emasoft/claude-menu-system?label=release)](https://github.com/Emasoft/claude-menu-system/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<!--BADGES-END-->
 
 The `AskQuestion` prompt is not good for a big number of choices.
 
