@@ -65,3 +65,11 @@ ignore = [
 # Renderer docstrings use × as multiplication sign in "category × severity matrix"
 # which is the standard math notation. Suppress the lint, not the meaning.
 "scripts/menu_render.py" = ["RUF002"]
+# cpv_network_resilience.py + publish.py are vendored verbatim from the
+# canonical CPV scaffold via standardize_plugin --force-templates. Lint
+# noise in those files is upstream's concern, not ours — silencing here
+# keeps `uv run ruff check .` clean without touching the canonical text
+# (which would create drift the next time we re-run --force-templates).
+# RUF002: docstrings use × for "N×M" multiplication notation.
+# UP037: quoted forward-reference annotation kept for Python 3.10 compat.
+"scripts/cpv_network_resilience.py" = ["RUF002", "UP037"]
