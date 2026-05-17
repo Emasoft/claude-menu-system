@@ -5,6 +5,30 @@ All notable changes to **claude-menu-system** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-05-17
+
+### Fixed
+
+- **Critical install bug** — `.claude-plugin/plugin.json` declared
+  `"hooks": "./hooks/hooks.json"`, which pointed the manifest override
+  at the auto-discovered default file. Claude Code rejects this with
+  `Duplicate hooks file detected` AND silently disables the plugin's
+  hooks (and any sibling MCP servers). v0.1.3 and earlier would not
+  load on any Claude Code instance. Fix: remove the `hooks` field
+  entirely — the canonical `hooks/hooks.json` is auto-discovered.
+
+  This is empirical plugin-loading bug #2 catalogued by CPV
+  (`claude-plugins-validation`) under RC-PLUGIN-LOAD-002. The very
+  bug-class that motivated CPV's loader-audit rules. Ironic.
+
+### Changed
+
+- **README rewritten** to lead with the value proposition: "The
+  AskQuestion prompt is not good for a big number of choices. Just
+  run this command and you get a nice menu with as many entries as
+  you need." Followed by a single copy-paste snippet. ~240 lines
+  trimmed to ~80.
+
 ## [0.1.3] — 2026-05-17
 
 ### Removed
