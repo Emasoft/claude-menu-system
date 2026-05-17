@@ -1018,7 +1018,19 @@ def _gh_secret_exists(plugin_root: Path, secret_name: str) -> bool:
 
 
 def _current_repo_slug(plugin_root: Path) -> str | None:
-    """Return owner/repo slug for current git origin, or None."""
+    """Return owner/repo slug for current git origin, or None.
+
+    Bug-fix for upstream CPV template emission: the regex was shipped with
+    a doubled backslash (`(?:\\\\.git)?$`), which matched the literal
+    string `\\.git` instead of the file extension `.git`. Result:
+    `Emasoft/claude-menu-system.git` was returned as the slug instead of
+    `Emasoft/claude-menu-system`, causing _plugin_in_remote_marketplace to
+    reject every plugin whose marketplace entry omits the `.git` suffix
+    (which is the canonical form per marketplace-authoring-contract).
+
+    Same bug class as v2.87.1 issue #25 Defect C; this is a separate
+    instance the patch missed.
+    """
     r = subprocess.run(
         ["git", "remote", "get-url", "origin"],
         cwd=str(plugin_root),
@@ -1028,7 +1040,8 @@ def _current_repo_slug(plugin_root: Path) -> str | None:
     )
     if r.returncode != 0:
         return None
-    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\\.git)?$", r.stdout.strip())
+    # Match both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", r.stdout.strip())
     return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
