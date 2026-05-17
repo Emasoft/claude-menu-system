@@ -5,6 +5,53 @@ All notable changes to **claude-menu-system** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-05-17
+
+### Removed
+
+- **`skills/render-menu/SKILL.md`** — the skill path is gone. Benchmarks
+  in v0.1.2 (under `CLAUDE_CODE_EFFORT_LEVEL=max` opus) showed the skill
+  fork took **15-25 seconds** end-to-end vs **25 ms** for direct Bash to
+  `menu_write.py`, dominated by extended-thinking model inference no
+  skill-frontmatter knob could escape. `effort: low`, removing `model:`,
+  removing `allowed-tools:`, removing `context: fork` — none helped on
+  a max-effort session. No user would wait that long for a menu.
+
+### Changed
+
+- **README rewritten** to lead with Option 1 (direct Bash invocation).
+  Plugin authors call `python3 $CLAUDE_PLUGIN_ROOT/scripts/menu_write.py spec.json`
+  from any Bash block in their orchestrator. ~25 ms. Reliable. No fork.
+- **`commands/menu-test.md`** updated to invoke `menu_write.py` directly
+  instead of the skill.
+- **`commands/menu-render.md`** updated to invoke `menu_write.py` directly
+  instead of the skill.
+- Plugin now ships **only hooks + scripts + commands + examples**.
+
+### Why
+
+The skill existed for the use case "consumer wants to delegate menu
+rendering to a fork so the parent doesn't pay any tokens". In practice:
+(a) the fork's wall time was unacceptable, (b) the parent was going to
+spend Bash-tool tokens anyway, and (c) direct Bash is a 25 ms call —
+faster than any fork could be. The skill was solving the wrong problem.
+
+### Migration for consumers
+
+If you were using `Skill({skill: "claude-menu-system:render-menu", args: "spec.json"})`:
+
+```bash
+# Replace with:
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/menu_write.py" "spec.json"
+```
+
+If your plugin is in another marketplace, resolve the cache path:
+
+```bash
+CMS_ROOT=$(ls -d ~/.claude/plugins/cache/emasoft-plugins/claude-menu-system/*/ | sort -V | tail -1)
+python3 "$CMS_ROOT/scripts/menu_write.py" spec.json
+```
+
 ## [0.1.2] — 2026-05-17
 
 ### Fixed

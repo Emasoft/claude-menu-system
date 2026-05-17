@@ -4,35 +4,33 @@
 [![Release](https://img.shields.io/github/v/release/Emasoft/claude-menu-system?label=release)](https://github.com/Emasoft/claude-menu-system/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Universal terminal-menu system for Claude Code plugins.** A haiku-fork
-skill renders a JSON menu spec to a tempfile, then a `Stop` hook emits
-it as `systemMessage` at main-session turn end — the menu appears in
-the user's terminal **exactly when they can type a reply**, without
-burning opus tokens on copy-into-prose.
+**Universal terminal-menu system for Claude Code plugins.** Any agent
+writes a JSON menu spec to a tempfile via Bash; a bundled `Stop` hook
+emits it as `systemMessage` at main-session turn end — the menu appears
+in the user's terminal **exactly when they can type a reply**.
+
+The renderer runs in **~25 ms** (Python interpreter startup + 0.4 ms of
+actual work). No subagent fork, no extended-thinking pass, no token cost
+to the orchestrator — just a normal Bash tool call.
 
 ## Why this exists
-
-Until now, plugin orchestrators that wanted to display a menu had to:
-
-1. Spend opus tokens rendering the menu themselves in prose, OR
-2. Invoke a haiku fork via a `Skill` tool call to render — but the
-   skill's reply was only visible to the parent agent, NOT the user.
-   To display the menu, the parent then had to **copy the rendered
-   text into its prose response**, burning the same opus tokens it
-   was trying to save.
 
 Empirically (see `Emasoft/token-reporter-plugin` source, line 3811),
 `systemMessage` emitted from a **main-session `Stop` hook** routes
 directly to the user's terminal — bypassing the parent agent entirely.
 This plugin packages that pattern as a reusable building block:
 
-- A `context: fork` haiku skill writes the rendered menu to a tempfile
-- A bundled `Stop` hook reads the tempfile and emits it as `systemMessage`
-- The menu appears at turn-end, right when the user is about to type
+- Any agent runs `python3 $CLAUDE_PLUGIN_ROOT/scripts/menu_write.py spec.json` via Bash
+- The script renders the menu (Unicode box-drawing, ANSI colors, auto-wrap, auto-width) and queues it
+- The bundled `Stop` hook emits the queue as `systemMessage` at turn end
+- The menu appears in the user's terminal, right when they can type
 
-**Token cost:** the opus orchestrator never sees the menu text. Spends
-≈ 50 tokens (for the Skill call + a one-word ack) instead of ≈ 2,000
-tokens (for copy-into-prose).
+**Why not a skill?** Earlier versions shipped a `render-menu` skill that
+spawned a haiku fork. Benchmarks (v0.1.2) showed the skill path took
+**15-25 seconds** vs **25 ms** for direct Bash, dominated by model
+inference overhead (especially with `CLAUDE_CODE_EFFORT_LEVEL=max`).
+The skill path was removed in v0.1.3 because no one would wait that
+long for a menu. Use Bash.
 
 ## Install
 
@@ -41,8 +39,8 @@ claude plugin install Emasoft/claude-menu-system@emasoft-plugins
 /reload-plugins
 ```
 
-The plugin's hooks/skills load on `/reload-plugins` — no full session
-restart needed. Self-test:
+The plugin's hooks load on `/reload-plugins` — no full session restart
+needed. Self-test:
 
 ```
 /menu-test
@@ -52,12 +50,11 @@ A demo menu should appear in your terminal at the end of the current turn.
 
 ## How to use it from your own plugin
 
-In an orchestrator slash command (or any skill that needs to display
-a menu), write the spec to a tempfile, invoke the skill, and let the
-hook emit at turn end:
+In any orchestrator slash command, agent, or skill body — write the spec
+to a tempfile and invoke the writer script via Bash. The hook does the rest:
 
 ```bash
-# In your orchestrator's body (Bash block):
+# In your orchestrator's body (single Bash block):
 cat > /tmp/my-plugin-menu-spec.json <<'EOF'
 {
   "spec_version": 1,
@@ -74,17 +71,28 @@ cat > /tmp/my-plugin-menu-spec.json <<'EOF'
   "footer": "Type a number to choose:"
 }
 EOF
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/menu_write.py" /tmp/my-plugin-menu-spec.json
 ```
 
-```
-# Then invoke the skill:
-Skill({skill: "claude-menu-system:render-menu", args: "/tmp/my-plugin-menu-spec.json"})
+The script prints the queue file path on stdout (one line) and exits.
+End your turn — the menu appears in the user's terminal via the Stop
+hook. Their reply (`1`, `2`, `3`, or `0`) arrives in your next turn;
+route it via the sibling `.actions.json` file the script also wrote
+(it maps rendered key → `action_id`).
+
+**Cross-plugin invocation:** other plugins call into this one via
+the script path under the cache root:
+
+```bash
+python3 ~/.claude/plugins/cache/emasoft-plugins/claude-menu-system/<version>/scripts/menu_write.py spec.json
 ```
 
-The skill returns the queue file path. End your turn — the menu appears
-in the user's terminal. Their reply (`1`, `2`, `3`, or `0`) arrives in
-your next turn; route it via the sibling `.actions.json` file the skill
-also wrote (it maps rendered key → `action_id`).
+Resolve the version dynamically:
+
+```bash
+CMS_ROOT=$(ls -d ~/.claude/plugins/cache/emasoft-plugins/claude-menu-system/*/ | sort -V | tail -1)
+python3 "$CMS_ROOT/scripts/menu_write.py" spec.json
+```
 
 ## Spec schema
 
@@ -109,6 +117,8 @@ Top-level required fields for every mode:
 | `multi_box`    | Stack of panels with even-budget distribution                              |
 | `progress`     | Title + bar + counter (`12/24 (50%)`)                                     |
 | `confirm`      | Yes / No / Cancel three-row prompt                                        |
+
+See `examples/` for canonical specs you can copy-paste — one per mode.
 
 ### Box styles
 
@@ -155,36 +165,27 @@ signals say no.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ orchestrator (any plugin, any model)                         │
-│  1. write JSON spec to /tmp/<spec>.json                      │
-│  2. Skill({skill: "claude-menu-system:render-menu", args})   │
-└────────────────┬─────────────────────────────────────────────┘
+│ orchestrator (any plugin, any model, any agent)             │
+│  python3 $CLAUDE_PLUGIN_ROOT/scripts/menu_write.py spec.json│
+│                                                              │
+│  · validates spec via menu_spec.py                          │
+│  · renders via menu_render.py (8 modes, 5 styles, ANSI)     │
+│  · queues to $TMPDIR/claude-menu-system/<session_id>/       │
+│  · prints queue path (~25ms total)                          │
+└────────────────┬────────────────────────────────────────────┘
                  │
-                 ▼
-┌─────────────────────────────────────────────────────────────┐
-│ render-menu skill (haiku fork, agent: general-purpose)       │
-│  body: `python3 $CLAUDE_PLUGIN_ROOT/scripts/menu_write.py`   │
-│   → reads spec, renders via menu_render, queues file         │
-│   → replies with queue path (one line, nothing else)         │
-└────────────────┬─────────────────────────────────────────────┘
-                 │
-                 ▼ skill fork ends → SubagentStop fires
-┌─────────────────────────────────────────────────────────────┐
-│ SubagentStop hook (menu_emit.py)                             │
-│  · logs only — systemMessage from SubagentStop routes to AI  │
-│    context, NOT the user terminal. Menu file stays queued.   │
-└──────────────────────────────────────────────────────────────┘
-
-                 ... main session continues, eventually turn ends ...
+                 ▼  ... orchestrator continues working ...
+                    eventually the main-session turn ends ...
 
 ┌─────────────────────────────────────────────────────────────┐
-│ Stop hook (menu_emit.py)  ← fires at main-session turn end   │
-│  · scans ${TMPDIR}/claude-menu-system/<session_id>/          │
-│  · concatenates menu files in timestamp order                 │
+│ Stop hook (menu_emit.py)  ← fires at main-session turn end  │
+│  · scans $TMPDIR/claude-menu-system/<session_id>/            │
+│  · concatenates menu files in timestamp order                │
 │  · applies 10K cap with tiered truncation                    │
-│  · emits as {"systemMessage": "..."} on stdout               │
-│  · deletes processed files                                    │
-└────────────────┬─────────────────────────────────────────────┘
+│  · strips ANSI if NO_COLOR / TERM=dumb at hook-fire time     │
+│  · emits as {"systemMessage": "\n..."} on stdout             │
+│  · deletes processed files                                   │
+└────────────────┬────────────────────────────────────────────┘
                  │
                  ▼
         ╔═══════════════════╗
@@ -207,6 +208,14 @@ a three-tier strategy:
 Line-safe truncation (cut only at `\n` boundaries) ensures ANSI codes
 are never severed mid-escape.
 
+End-to-end timing measured on Apple Silicon Python 3.12 (50 iterations):
+
+| Phase | Median | Notes |
+|---|---:|---|
+| `python3 menu_write.py spec.json` | **25 ms** | dominated by interpreter startup (~13ms) + 3 module imports (~12ms) |
+| Pure work after imports paid | 0.4 ms | json load + validate + render + 2 atomic writes |
+| Stop hook end-to-end | 25 ms | same shape — interpreter + emit script imports + JSON encode + print |
+
 ## Development
 
 ```bash
@@ -224,7 +233,7 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-The test suite is 188 tests covering 95%+ of every module. All tests
+The test suite is 189 tests covering 95%+ of every module. All tests
 run in <1 second on a modern laptop.
 
 ## License
