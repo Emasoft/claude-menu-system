@@ -1,0 +1,40 @@
+{
+  "spec_version": 1,
+  "mode": "menu",
+  "plugin": "cms",
+  "slug": "first-contact",
+  "header": "claude-menu-system self-test \u2014 pick anything",
+  "rows": [
+    {
+      "key": "1",
+      "action_id": "demo-summary",
+      "label": "See a severity summary"
+    },
+    {
+      "key": "2",
+      "action_id": "demo-breakdown",
+      "label": "See a per-category breakdown matrix"
+    },
+    {
+      "key": "3",
+      "action_id": "demo-status",
+      "label": "See a status table (\u2713/\u2717/\u26a0)"
+    },
+    {
+      "key": "4",
+      "action_id": "demo-panel",
+      "label": "See a single panel with wrapped text"
+    },
+    {
+      "key": "A",
+      "action_id": "freeform",
+      "label": "Free-form question"
+    },
+    {
+      "key": "0",
+      "action_id": "cancel",
+      "label": "Cancel / Exit"
+    }
+  ],
+  "footer": "Type a number to choose:"
+}

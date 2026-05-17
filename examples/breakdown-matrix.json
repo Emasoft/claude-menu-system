@@ -1,0 +1,51 @@
+{
+  "spec_version": 1,
+  "mode": "breakdown",
+  "plugin": "cms",
+  "slug": "demo-breakdown",
+  "title": "Demo findings breakdown",
+  "row_header": "Source",
+  "rows": [
+    {
+      "label": "Schema validation",
+      "counts": {
+        "CRITICAL": 0,
+        "MAJOR": 0,
+        "MINOR": 1,
+        "NIT": 0,
+        "WARNING": 0
+      }
+    },
+    {
+      "label": "Security scan",
+      "counts": {
+        "CRITICAL": 0,
+        "MAJOR": 1,
+        "MINOR": 2,
+        "NIT": 1,
+        "WARNING": 1
+      }
+    },
+    {
+      "label": "Style check",
+      "counts": {
+        "CRITICAL": 0,
+        "MAJOR": 0,
+        "MINOR": 0,
+        "NIT": 6,
+        "WARNING": 0
+      }
+    },
+    {
+      "label": "Cross-reference",
+      "counts": {
+        "CRITICAL": 0,
+        "MAJOR": 0,
+        "MINOR": 0,
+        "NIT": 0,
+        "WARNING": 1
+      }
+    }
+  ],
+  "verdict": "VALID"
+}

@@ -5,6 +5,25 @@ All notable changes to **claude-menu-system** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-05-17
+
+### Added
+
+- `/menu-test` slash command — self-test that renders a demo menu so
+  users can verify the plugin is wired correctly after install.
+- `/menu-render <spec-path>` slash command — ad-hoc rendering from any
+  JSON spec file on disk; useful for plugin authors testing their specs.
+- `scripts/menu_test_specs.py` — helper script that produces canonical
+  demo specs for all 8 modes. Used by `/menu-test` and re-used to seed
+  the `examples/` gallery.
+- `examples/` directory with 8 canonical JSON specs (one per render
+  mode) — plugin authors can copy-paste these as starting points.
+
+### Notes
+
+- All changes additive — no behavior change to v0.1.0 hooks / skill /
+  renderer. Consumer plugins built against v0.1.0 work unchanged on v0.1.1.
+
 ## [0.1.0] — 2026-05-17
 
 Initial release. First-class, reusable menu rendering for Claude Code

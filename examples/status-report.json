@@ -1,0 +1,40 @@
+{
+  "spec_version": 1,
+  "mode": "status_table",
+  "plugin": "cms",
+  "slug": "demo-status",
+  "title": "Demo plugin build status",
+  "row_header": "Component",
+  "rows": [
+    {
+      "label": "plugin.json",
+      "status": "ok",
+      "notes": "valid manifest"
+    },
+    {
+      "label": "hooks/hooks.json",
+      "status": "ok",
+      "notes": "3 events wired"
+    },
+    {
+      "label": "skills/render-menu",
+      "status": "ok",
+      "notes": "fork-skill present"
+    },
+    {
+      "label": "scripts/menu_render.py",
+      "status": "ok",
+      "notes": "8 modes, 5 styles"
+    },
+    {
+      "label": "tests/",
+      "status": "ok",
+      "notes": "188 tests, 95%+ coverage"
+    },
+    {
+      "label": "publish.py",
+      "status": "pending",
+      "notes": "deferred to v0.1.1"
+    }
+  ]
+}

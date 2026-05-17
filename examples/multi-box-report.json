@@ -1,0 +1,27 @@
+{
+  "spec_version": 1,
+  "mode": "multi_box",
+  "plugin": "cms",
+  "slug": "demo-multi",
+  "boxes": [
+    {
+      "header": "Summary",
+      "body": [
+        "188 tests, 95%+ coverage, 0.8s runtime"
+      ]
+    },
+    {
+      "header": "Modes available",
+      "body": [
+        "menu / summary / breakdown / status_table",
+        "panel / multi_box / progress / confirm"
+      ]
+    },
+    {
+      "header": "Box styles",
+      "body": [
+        "heavy / rounded / light / double / ascii (auto-downgrade)"
+      ]
+    }
+  ]
+}

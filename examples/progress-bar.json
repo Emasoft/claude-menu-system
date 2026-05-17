@@ -1,0 +1,9 @@
+{
+  "spec_version": 1,
+  "mode": "progress",
+  "plugin": "cms",
+  "slug": "demo-progress",
+  "header": "Demo progress",
+  "current": 12,
+  "total": 20
+}

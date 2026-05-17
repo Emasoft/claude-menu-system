@@ -1,0 +1,9 @@
+{
+  "spec_version": 1,
+  "mode": "confirm",
+  "plugin": "cms",
+  "slug": "demo-confirm",
+  "header": "Proceed with the demo action?",
+  "yes_label": "Yes, do it",
+  "no_label": "No, abort"
+}
