@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ from menu_ansi import should_use_color, strip_ansi
 from menu_queue import (
     cleanup_empty_session_dir,
     list_pending_menus,
+    meta_path_for,
     remove_menu,
     session_id,
     session_lock,
@@ -53,8 +55,12 @@ TOTAL_BUDGET = 9500
 SMALL_MENU_THRESHOLD = 1000
 MAX_FULL_MENUS_ON_OVERFLOW = 2  # newest 2 stay full, rest go to title stubs
 
-# Debug log path — written when CLAUDE_MENU_DEBUG=1.
-DEBUG_LOG = Path("/tmp/claude-menu-system-debug.log")
+# Debug log path — written when CLAUDE_MENU_DEBUG=1. Use the platform's
+# tempdir (honors TMPDIR / TEMP / TMP per stdlib precedence) rather than
+# a hardcoded "/tmp" — fixes bandit B108 (hardcoded_tmp_directory) and
+# makes the log discoverable on Windows / sandboxed runners where /tmp
+# is not the system tempdir.
+DEBUG_LOG = Path(tempfile.gettempdir()) / "claude-menu-system-debug.log"
 
 
 def _log_debug(message: str) -> None:
@@ -87,14 +93,37 @@ def _truncate_big_menu(text: str, budget: int) -> str:
 
     Strategy: keep the header (first few lines including the top border
     and column headers) and the footer (last few lines including the
-    bottom border + footer text). Drop body rows from the middle and
-    inject a ``[N rows truncated]`` indicator line.
+    bottom border + footer text). Drop body rows from the bottom and
+    inject a ``[N rows truncated]`` indicator line whose count is the
+    number of rows ACTUALLY removed.
+
+    Count-accuracy contract: the integer in the indicator is exactly
+    ``len(body) - len(kept_body)`` at the moment the candidate is
+    accepted — no off-by-one, no double-counting. A pre-v0.1.6 bug
+    used ``dropped + len(body) - len(kept_body) + 1`` which is
+    ``2 * dropped + 1`` (the loop body incremented ``dropped`` and
+    popped simultaneously, so the two terms were the same quantity
+    counted twice, plus the leading ``+1``). Tests pin this.
+
+    Trailing-newline normalisation: callers conventionally finish menu
+    text with a trailing ``\\n``; ``str.split("\\n")`` on such input
+    yields an empty-string sentinel at the end. Before the v0.1.6 fix
+    that empty string was treated as a footer line, so ``footer_count=2``
+    captured ``["footer_text", ""]`` and the actual bottom border drifted
+    into the body slice. The border then got counted as a "row" that
+    could be dropped — inflating the indicator by 1 per call. We now
+    strip the trailing-newline sentinel before slicing so the header /
+    body / footer boundaries always land where the input shape implies.
 
     Falls back to ``line_safe_truncate`` if we can't preserve shape.
     """
     if len(text) <= budget:
         return text
     lines = text.split("\n")
+    # Strip the trailing empty-string sentinel that a final \n produces
+    # so it isn't mistakenly treated as a footer line. See docstring.
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
     if len(lines) < 6:
         # Too short to bisect meaningfully — line-safe truncate.
         return line_safe_truncate(text, budget)
@@ -108,19 +137,69 @@ def _truncate_big_menu(text: str, budget: int) -> str:
     if not body:
         return line_safe_truncate(text, budget)
     # Iteratively drop body rows from the bottom until size fits.
+    # Drop AT LEAST ONE row before the first size check — without an
+    # actual drop the indicator would claim "N rows truncated" with
+    # N=0, which is a lie. If header+footer+indicator alone exceeds
+    # the budget, fall through to line_safe_truncate.
     kept_body = body[:]
     while kept_body:
-        # M3: the dropped-row count is exactly how many body rows we removed,
-        # i.e. ``len(body) - len(kept_body)``. The old formula added a separate
-        # ``dropped`` counter (which equals the same difference) plus a spurious
-        # +1, double-counting — a 7-row drop printed "15 rows truncated".
-        indicator = f"  …[{len(body) - len(kept_body)} rows truncated]"
+        # M3 (count accuracy): pop one body row, THEN compute the indicator as
+        # exactly ``len(body) - len(kept_body)`` — the number of rows actually
+        # removed. Popping before the size check guarantees at least one drop,
+        # so the indicator never claims "0 rows truncated". The old (pre-v0.1.6)
+        # formula ``dropped + (len(body) - len(kept_body)) + 1`` double-counted
+        # the same difference and added a spurious +1 — a 7-row drop printed
+        # "15 rows truncated". This keeps the corrected ``len(body) - len(kept_body)``
+        # form; ``dropped`` is just a readable alias for it, never an extra counter.
+        kept_body.pop()
+        dropped = len(body) - len(kept_body)
+        indicator = f"  …[{dropped} rows truncated]"
         candidate = "\n".join(header + kept_body + [indicator] + footer)
         if len(candidate) <= budget:
             return candidate
-        kept_body.pop()
     # Body became empty — last resort.
     return line_safe_truncate(text, budget)
+
+
+# Sentinel returned by _read_truncate_at when the spec said
+# "disable truncation entirely for this menu" (sidecar present with
+# ``truncate_at: null``). Distinguishes from "sidecar absent / field
+# not set" (which returns Python's None and means "default behavior").
+TRUNCATE_DISABLED: object = object()
+
+
+def _read_truncate_at(menu_file: Path) -> int | None | object:
+    """Return the per-menu ``truncate_at`` from the .meta.json sidecar.
+
+    Three return values, three meanings:
+      - ``int > 0`` — caller-supplied per-menu cap; emit uses this in
+        place of the default ``per_new`` slice for this single menu.
+      - ``TRUNCATE_DISABLED`` (sentinel) — caller set
+        ``"truncate_at": null`` explicitly; emit must NOT do any
+        per-menu shaping (the final 9500-char safety net still applies,
+        but body-row trimming is skipped so overflow fails loudly).
+      - ``None`` — sidecar absent OR malformed; emit falls back to the
+        default heuristic shaping (current pre-truncate-at behaviour).
+    """
+    meta_file = meta_path_for(menu_file)
+    if not meta_file.is_file():
+        return None
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _log_debug(f"meta read failed for {meta_file}: {exc}")
+        return None
+    if not isinstance(meta, dict) or "truncate_at" not in meta:
+        return None
+    raw = meta["truncate_at"]
+    if raw is None:
+        return TRUNCATE_DISABLED
+    # Validation already happened at write time (menu_spec). Defensive
+    # re-check here covers hand-edited sidecars / queue corruption —
+    # garbage values fall back to default heuristic shaping.
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        return None
+    return raw
 
 
 def _compose_payload(menu_files: list[Path]) -> tuple[str, list[Path]]:
@@ -171,11 +250,30 @@ def _compose_payload(menu_files: list[Path]) -> tuple[str, list[Path]]:
 
     per_new = remaining // max(1, len(new))
     rendered_new: list[str] = []
-    for _, t in new:
-        if len(t) <= SMALL_MENU_THRESHOLD or len(t) <= per_new:
+    for path, t in new:
+        override = _read_truncate_at(path)
+        if override is TRUNCATE_DISABLED:
+            # Spec explicitly disabled per-menu truncation — pass through
+            # unchanged. The composed payload's final safety net (the
+            # ``line_safe_truncate`` step below) still enforces the
+            # 9500-char queue cap, but no body-row shaping happens here.
             rendered_new.append(t)
+        elif isinstance(override, int):
+            # Explicit per-menu cap — always honor it (override the
+            # SMALL/per_new heuristic). The user asked for a specific
+            # ceiling on this one menu's contribution.
+            if len(t) <= override:
+                rendered_new.append(t)
+            else:
+                rendered_new.append(_truncate_big_menu(t, override))
         else:
-            rendered_new.append(_truncate_big_menu(t, per_new))
+            # No per-menu override (sidecar absent / malformed) — default
+            # heuristic shaping: pass through if small or already fits,
+            # otherwise shape to per_new.
+            if len(t) <= SMALL_MENU_THRESHOLD or len(t) <= per_new:
+                rendered_new.append(t)
+            else:
+                rendered_new.append(_truncate_big_menu(t, per_new))
     body_parts = []
     if stub_block:
         body_parts.append(stub_block)

@@ -922,3 +922,174 @@ def test_cli_duplicate_key_spec_returns_three(tmp_path: Path) -> None:
     )
     rc = _cli(["menu_spec.py", str(dup)])
     assert rc == 3
+
+
+# ---------------------------------------------------------------------------
+# Empty-string keys are rejected
+# ---------------------------------------------------------------------------
+
+
+def test_validate_menu_rejects_empty_string_key() -> None:
+    """An empty key is unreachable (no character a user can type for it)."""
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "empty-key",
+        "header": "Pick",
+        "rows": [
+            {"key": "", "action_id": "ghost", "label": "Unreachable row"},
+        ],
+    }
+    with pytest.raises(SpecError, match=r"menu row 0 has empty 'key'"):
+        validate(spec)
+
+
+# ---------------------------------------------------------------------------
+# Test 18 — multi-char non-reserved keys are rejected
+# ---------------------------------------------------------------------------
+
+
+def test_validate_menu_rejects_multi_char_non_reserved_key() -> None:
+    """Keys must be single chars unless they're in the reserved static set.
+
+    ``Esc``, ``Tab``, ``Enter`` etc. look reasonable but the renderer +
+    user reply are CHARACTER-LEVEL: a user types one char, not a word.
+    A spec with ``"key": "Esc"`` would render the literal string in the
+    table but no keystroke could match it. Reject at validation time.
+    """
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "multi-char-key",
+        "header": "Pick",
+        "rows": [
+            {"key": "Esc", "action_id": "cancel", "label": "Cancel"},
+        ],
+    }
+    with pytest.raises(SpecError, match=r"menu row 0 has multi-character 'key' 'Esc'"):
+        validate(spec)
+
+    # Two-char alphanumeric is also rejected (e.g. "12" — not a single keystroke).
+    spec_two_char = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "two-char-key",
+        "header": "Pick",
+        "rows": [{"key": "12", "action_id": "twelve", "label": "Twelve"}],
+    }
+    with pytest.raises(SpecError, match=r"menu row 0 has multi-character 'key' '12'"):
+        validate(spec_two_char)
+
+
+# ---------------------------------------------------------------------------
+# Test 19 — valid reserved keys pass validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reserved_key", ["0", "A", "M", "B", "X"])
+def test_validate_menu_accepts_each_reserved_key(reserved_key: str) -> None:
+    """``0``, ``A``, ``M``, ``B``, ``X`` are all valid as single-char keys.
+
+    They're "reserved" only in the sense that the renderer skips
+    renumber for them — validation-wise they're just normal single-char
+    keys. The parametrize sweep proves every member of ``_STATIC_KEYS``
+    passes individually.
+    """
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": f"reserved-{reserved_key}",
+        "header": "Pick",
+        "rows": [
+            {"key": "1", "action_id": "normal", "label": "Normal row"},
+            {"key": reserved_key, "action_id": "nav", "label": "Nav row"},
+        ],
+    }
+    # No exception expected — the validator must accept reserved keys
+    # as valid (they're single chars AND in the static allow-list).
+    result = validate(spec)
+    assert result["rows"][1]["key"] == reserved_key
+
+
+# ---------------------------------------------------------------------------
+# Test 20 — truncate_at validation: positive int / null / absent / invalid
+# ---------------------------------------------------------------------------
+
+
+def test_validate_truncate_at_positive_int_passes() -> None:
+    """A positive int ``truncate_at`` overrides the default emit cap."""
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "ta-int",
+        "header": "Pick",
+        "rows": [{"key": "1", "action_id": "a", "label": "A"}],
+        "truncate_at": 5000,
+    }
+    result = validate(spec)
+    assert result["truncate_at"] == 5000
+
+
+def test_validate_truncate_at_null_passes() -> None:
+    """``truncate_at: null`` is the documented "disable truncation" signal."""
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "ta-null",
+        "header": "Pick",
+        "rows": [{"key": "1", "action_id": "a", "label": "A"}],
+        "truncate_at": None,
+    }
+    result = validate(spec)
+    assert result["truncate_at"] is None
+
+
+def test_validate_truncate_at_absent_passes() -> None:
+    """Absent ``truncate_at`` is the most common case (default heuristic)."""
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "ta-absent",
+        "header": "Pick",
+        "rows": [{"key": "1", "action_id": "a", "label": "A"}],
+    }
+    result = validate(spec)
+    assert "truncate_at" not in result
+
+
+@pytest.mark.parametrize(
+    ("bad_value", "match"),
+    [
+        (0, r"truncate_at' must be > 0 when set \(got 0\)"),
+        (-1, r"truncate_at' must be > 0 when set \(got -1\)"),
+        (-100, r"truncate_at' must be > 0 when set \(got -100\)"),
+        ("5000", r"truncate_at' must be a positive int or null, got str"),
+        (5.0, r"truncate_at' must be a positive int or null, got float"),
+        ([5000], r"truncate_at' must be a positive int or null, got list"),
+        # bool is a subclass of int but explicitly rejected — True would
+        # otherwise be silently interpreted as truncate_at=1.
+        (True, r"truncate_at' must be a positive int or null, got bool"),
+        (False, r"truncate_at' must be a positive int or null, got bool"),
+    ],
+    ids=["zero", "negative-1", "negative-100", "str", "float", "list", "true", "false"],
+)
+def test_validate_truncate_at_rejects_invalid_value(bad_value: object, match: str) -> None:
+    """Anything that isn't ``None`` or ``int > 0`` is a SpecError."""
+    spec = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "ta-bad",
+        "header": "Pick",
+        "rows": [{"key": "1", "action_id": "a", "label": "A"}],
+        "truncate_at": bad_value,
+    }
+    with pytest.raises(SpecError, match=match):
+        validate(spec)

@@ -33,6 +33,50 @@ FILTER_REGEX_EXCLUDE: '(tests_dev/|docs_dev/|scripts_dev/|samples_dev/|examples_
 PYTHON_RUFF_ARGUMENTS: '--select=E,F,W,I --ignore=E501'
 PYTHON_MYPY_ARGUMENTS: '--ignore-missing-imports'
 
+# Bandit: precise per-rule skips with documented justifications. Every
+# OTHER bandit check (eval, hardcoded passwords, weak crypto, SQL
+# injection, pickle deserialization, XML XXE, etc. — the long tail of
+# real risks) stays ACTIVE.
+#
+#   B101 (assert_used)  — pytest's testing primitive IS `assert <expr>`.
+#                         The bandit warning ("asserts get stripped
+#                         under python -O") doesn't apply to test code
+#                         that never runs under -O. We also exclude
+#                         the tests/ tree below for the same reason.
+#
+#   B404 (blacklist_import_subprocess) — boilerplate "consider security
+#                         implications" import-time warning. We DO
+#                         consider them: every subprocess call site in
+#                         this repo (publish.py + cpv_network_resilience.py)
+#                         invokes a known CLI (git/gh) with a list-form
+#                         argv and shell=False. The threat bandit warns
+#                         about (shell injection via untrusted input)
+#                         is not present in this repo's CLI-wrapper code.
+#
+#   B603 (subprocess_without_shell_equals_true) — paradoxical rule that
+#                         flags THE SAFE PATTERN (list argv, no shell)
+#                         on the grounds that the user-callable args
+#                         could theoretically come from untrusted
+#                         sources. In this repo's call sites the args
+#                         are project-local strings (branch names,
+#                         filenames, gh subcommands), never network
+#                         input. The unsafe pattern (shell=True with
+#                         string concatenation) is NOT used anywhere
+#                         and would be caught by B602 which remains
+#                         active.
+#
+#   B607 (start_process_with_partial_path) — flags bare command names
+#                         like `git` / `gh` instead of `/usr/bin/git`.
+#                         Hard-coding absolute paths would BREAK the
+#                         tooling on every dev's machine (Linux, macOS,
+#                         Windows, brew, system) because git/gh live in
+#                         different absolute paths per platform. The
+#                         project legitimately needs to resolve via
+#                         $PATH and this rule is incompatible with that
+#                         requirement.
+PYTHON_BANDIT_ARGUMENTS: '-s B101,B404,B603,B607'
+PYTHON_BANDIT_FILTER_REGEX_EXCLUDE: '(^|/)tests/'
+
 # Copy-paste detection — allow up to 5% duplication
 # (0% is too strict for plugins)
 COPYPASTE_JSCPD_ARGUMENTS: '--threshold 5'

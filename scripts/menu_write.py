@@ -32,11 +32,12 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure sibling modules resolve when this script runs from any cwd.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from menu_queue import actions_path_for, menu_path, write_atomic
+from menu_queue import actions_path_for, menu_path, meta_path_for, write_atomic
 from menu_render import render
 from menu_spec import SpecError, validate
 
@@ -86,6 +87,18 @@ def write_menu(spec_path_or_json: str) -> Path:
             write_atomic(actions_path_for(target), json.dumps(action_map, indent=2))
         except OSError as exc:
             raise SystemExit((f"actions write failed: {exc}", 4)) from exc
+
+    # Persist per-menu emit metadata when the spec carries any. Today the
+    # only field is ``truncate_at`` (validated in menu_spec). Writing the
+    # sidecar only when set keeps the queue dir clean for the default case.
+    meta: dict[str, Any] = {}
+    if "truncate_at" in spec:
+        meta["truncate_at"] = spec["truncate_at"]
+    if meta:
+        try:
+            write_atomic(meta_path_for(target), json.dumps(meta, indent=2))
+        except OSError as exc:
+            raise SystemExit((f"meta write failed: {exc}", 4)) from exc
 
     return target
 

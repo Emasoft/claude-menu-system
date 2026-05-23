@@ -99,6 +99,19 @@ output:
 
 See `examples/` for one canonical spec per mode — copy and adjust.
 
+## Optional spec fields
+
+These can appear in any spec on top of the per-mode required fields.
+
+| Field          | Type             | Default | Meaning                                                                                   |
+|----------------|------------------|---------|-------------------------------------------------------------------------------------------|
+| `truncate_at`  | `int > 0` / null | absent  | Per-menu cap (chars) consumed by the emit hook. `null` disables per-menu shaping entirely (overflow fails loudly under the 9500-char queue cap). Absent = default heuristic shaping. |
+
+Reserved keys (always preserved verbatim even with `renumber:true`):
+`0`, `A`, `M`, `B`, `X` — the last three are CPV's navigation letters
+(Main / Back / eXit) so menus that route through CPV's fixed-key contract
+keep their nav glyphs stable across rerenders.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

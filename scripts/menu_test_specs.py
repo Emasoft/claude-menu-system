@@ -59,7 +59,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "title": "Demo validation summary",
         "counts": {"critical": 0, "major": 1, "minor": 3, "nit": 7, "warning": 2},
         "verdict": "VALID",
-        "report_path": "/tmp/demo-report.md",
+        "report_path": "./reports/demo-report.md",
     },
     "breakdown-matrix": {
         "spec_version": 1,

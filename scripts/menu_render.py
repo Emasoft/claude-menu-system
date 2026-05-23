@@ -187,7 +187,16 @@ def _style(spec: dict[str, Any], default: str) -> BoxStyle:
 # Menu mode
 # ---------------------------------------------------------------------------
 
-_STATIC_KEYS = frozenset({"0", "A"})
+# Static keys bypass renumbering even when `renumber:true`.
+#   "0" — historical cancel / back convention.
+#   "A" — historical "All / ALL findings" shortcut.
+#   "M" / "B" / "X" — CPV's reserved navigation letters: Main menu / Back / eXit.
+# Reserving M/B/X here makes CPV's fixed-key contract correct-by-default
+# so callers don't have to remember `renumber:false` just to keep nav
+# letters stable. Single-source-of-truth for both renderer and validator
+# (menu_spec._validate_menu treats this same set as the "single-or-static"
+# allowlist for key validation).
+_STATIC_KEYS = frozenset({"0", "A", "M", "B", "X"})
 
 
 def render_menu(spec: dict[str, Any], use_color: bool = False) -> tuple[str, dict[str, str]]:
@@ -223,8 +232,8 @@ def render_menu(spec: dict[str, Any], use_color: bool = False) -> tuple[str, dic
                 warnings.warn(
                     f"renumber=True rewrote row key {r['key']!r} -> {rendered_key!r}; "
                     "numeric keys are positional placeholders under renumber "
-                    "(only '0'/'A' are preserved). Set renumber=False to keep "
-                    "literal keys.",
+                    f"(only the reserved static keys {sorted(_STATIC_KEYS)} are "
+                    "preserved). Set renumber=False to keep literal keys.",
                     stacklevel=2,
                 )
         # M1 (defense in depth): a duplicate rendered key would overwrite an

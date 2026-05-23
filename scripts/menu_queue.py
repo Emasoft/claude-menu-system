@@ -39,6 +39,10 @@ from pathlib import Path
 QUEUE_ROOT_NAME = "claude-menu-system"
 MENU_SUFFIX = ".menu.md"
 ACTIONS_SUFFIX = ".actions.json"
+# Sidecar for per-menu emit-time metadata (currently: truncate_at). The
+# rendered text is text-only by design — anything the emit hook needs at
+# truncation time but can't infer from the rendered bytes lives here.
+META_SUFFIX = ".meta.json"
 LOCK_FILE_NAME = ".queue.lock"
 
 _SANITIZE_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -130,6 +134,11 @@ def actions_path_for(menu_file: Path) -> Path:
     return menu_file.with_suffix("").with_suffix(ACTIONS_SUFFIX)
 
 
+def meta_path_for(menu_file: Path) -> Path:
+    """Sibling .meta.json path for a given menu file (per-menu emit metadata)."""
+    return menu_file.with_suffix("").with_suffix(META_SUFFIX)
+
+
 def write_atomic(target: Path, content: str) -> None:
     """Write ``content`` to ``target`` atomically (tempfile + replace).
 
@@ -188,9 +197,10 @@ def list_pending_menus(sid: str | None = None, *, ttl_seconds: int | None = None
         except OSError:
             continue
         if ttl_seconds > 0 and age > ttl_seconds:
-            # Stale — silently drop the menu + its actions sidecar.
+            # Stale — silently drop the menu + every sidecar.
             path.unlink(missing_ok=True)
             actions_path_for(path).unlink(missing_ok=True)
+            meta_path_for(path).unlink(missing_ok=True)
             continue
         files.append(path)
     # Filename starts with nanosecond timestamp → ASCII sort = time order.
@@ -199,15 +209,20 @@ def list_pending_menus(sid: str | None = None, *, ttl_seconds: int | None = None
 
 
 def remove_menu(menu_file: Path) -> None:
-    """Delete a menu file + its actions sidecar."""
+    """Delete a menu file + every sidecar (.actions.json, .meta.json)."""
     menu_file.unlink(missing_ok=True)
     actions_path_for(menu_file).unlink(missing_ok=True)
+    meta_path_for(menu_file).unlink(missing_ok=True)
 
 
 def cleanup_empty_session_dir(sid: str | None = None) -> None:
-    """If the session dir has no menu/actions files, remove the lock + dir."""
+    """If the session dir has no menu/actions/meta files, remove the lock + dir."""
     sd = session_dir(sid)
-    has_content = any(sd.glob(f"*{MENU_SUFFIX}")) or any(sd.glob(f"*{ACTIONS_SUFFIX}"))
+    has_content = (
+        any(sd.glob(f"*{MENU_SUFFIX}"))
+        or any(sd.glob(f"*{ACTIONS_SUFFIX}"))
+        or any(sd.glob(f"*{META_SUFFIX}"))
+    )
     if has_content:
         return
     # Drop the lock file too. We don't care if another process is mid-acquisition.
