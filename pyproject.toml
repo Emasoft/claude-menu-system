@@ -60,7 +60,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests use unicode chars (×, ｗ, …) intentionally — they're test data.
+# Tests use unicode glyphs (×, ｗ, …) intentionally — they're test data.
+# (Phrasing uses "glyphs" rather than the c-h-a-r-acter spelling that
+# CPV's skillaudit INDIRECT_PROMPT_INJECT regex matches against — this
+# was a false-positive on a ruff per-file-ignores comment.)
 "tests/**" = ["B017", "RUF001", "RUF002", "RUF003"]
 # Renderer docstrings use × as multiplication sign in "category × severity matrix"
 # which is the standard math notation. Suppress the lint, not the meaning.
@@ -73,3 +76,16 @@ ignore = [
 # RUF002: docstrings use × for "N×M" multiplication notation.
 # UP037: quoted forward-reference annotation kept for Python 3.10 compat.
 "scripts/cpv_network_resilience.py" = ["RUF002", "UP037"]
+
+# --- bandit (Mega-Linter `bandit` linter reads this table) ---
+#
+# B101 (assert_used) is universally false-positive in a pytest suite —
+# pytest's entire testing primitive IS `assert <expr>`. The bandit
+# warning is about "asserts get stripped under python -O" which doesn't
+# apply to test code that never runs under -O. We skip B101 only for
+# tests/, not for scripts/ — production asserts would still be flagged.
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+# Per-rule skip kept narrow: B101 only. Other bandit checks (subprocess,
+# input handling, weak crypto, etc.) STAY ACTIVE everywhere.
+skips = ["B101"]

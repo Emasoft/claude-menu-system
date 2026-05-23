@@ -92,10 +92,14 @@ def _write_menu_file(content: str, *, ts_ns: int | None = None, slug: str = "men
     return path
 
 
-def _invoke_main(monkeypatch, event: str, *, session_id: str = "test-session") -> str:
+def _invoke_main(monkeypatch, event: str, *, session_id: str = "test-session") -> None:
     """Run ``menu_emit.main`` with a mock hook payload on stdin.
 
-    Returns the captured stdout. Caller passes ``capsys`` separately.
+    Drives the hook end-to-end and asserts a clean return code. The
+    helper does NOT return stdout — callers read it directly via the
+    pytest ``capsys`` fixture after the call. (The previous ``-> str``
+    annotation lied about a return value that never existed; Pyright
+    correctly flagged the missing return path.)
     """
     payload = json.dumps({"hook_event_name": event, "session_id": session_id})
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
@@ -601,3 +605,259 @@ def test_read_hook_payload_returns_empty_dict_for_invalid_json(monkeypatch):
 
     monkeypatch.setattr(sys, "stdin", BrokenStdin())
     assert menu_emit._read_hook_payload() == {}
+
+
+# ---------------------------------------------------------------------------
+# 19. _truncate_big_menu — "[N rows truncated]" count is ACCURATE
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_big_menu_rows_truncated_count_is_accurate():
+    """The integer in '[N rows truncated]' equals rows ACTUALLY dropped.
+
+    Pre-PR the indicator used ``dropped + len(body) - len(kept_body) + 1``
+    which is ``2*dropped + 1`` — both terms count the same quantity, then
+    add 1 for good measure. Result: a menu that dropped 5 body rows
+    advertised "[11 rows truncated]". This test pins the corrected count.
+    """
+    # Build a menu with EXACTLY 30 body rows so we can predict the
+    # drop count. Header = 4 lines, footer = 2 lines, body = 30 rows.
+    header_lines = "TITLE\n┏━━━━━━━━━━┓\n┃ # | ITEM ┃\n┡━━━━━━━━━━┩\n"
+    # Each body row ~30 chars × 30 rows = ~900 chars body.
+    body_rows = "".join(f"│ {i:2d} | item-{i:02d}-padding-x │\n" for i in range(30))
+    footer_lines = "└──────────┘\nfooter line\n"
+    text = header_lines + body_rows + footer_lines
+    # Total ~1000 chars. Budget = 400 forces dropping enough body rows
+    # to fit header + remaining body + indicator + footer in 400 chars.
+    out = menu_emit._truncate_big_menu(text, budget=400)
+    assert len(out) <= 400
+    assert "rows truncated" in out
+
+    # Extract the claimed count from the indicator and confirm it
+    # matches the rows ACTUALLY absent from the output.
+    import re
+
+    m = re.search(r"\[(\d+) rows truncated\]", out)
+    assert m, f"indicator missing from output: {out!r}"
+    claimed_count = int(m.group(1))
+
+    # Count how many original body rows survive in the output.
+    surviving_rows = sum(1 for i in range(30) if f"item-{i:02d}" in out)
+    actually_dropped = 30 - surviving_rows
+    assert claimed_count == actually_dropped, (
+        f"indicator claimed [{claimed_count} rows truncated] but {actually_dropped} "
+        f"rows were actually dropped (30 total, {surviving_rows} survive in output). "
+        f"Pre-PR bug computed 2*dropped+1 — this test pins the fix."
+    )
+    # And the count must be > 0 — if zero rows were dropped, the
+    # indicator must not appear at all.
+    assert claimed_count > 0
+
+
+def test_truncate_big_menu_drops_at_least_one_before_claiming_truncation():
+    """The indicator only appears AFTER at least one row was actually dropped.
+
+    Pre-PR, the size check happened BEFORE any pop(), so the first
+    iteration could return ``header + ALL_body + "[1 rows truncated]" + footer``
+    when that string happened to fit the budget — claiming a drop that
+    never occurred. Post-PR, ``kept_body.pop()`` always runs before the
+    size check, so the indicator's count is at least 1.
+    """
+    header_lines = "TITLE\n┏━┓\n┃ ┃\n┡━┩\n"
+    body_rows = "".join(f"│ row-{i:03d} │\n" for i in range(20))
+    footer_lines = "└─┘\nfooter\n"
+    text = header_lines + body_rows + footer_lines
+
+    # Pick a budget JUST barely enough that the first iteration's
+    # candidate (with full body + indicator) would have fit if the
+    # indicator had said "1 rows truncated" with no actual drop.
+    # We deliberately pick a budget slightly less than full input so
+    # at least one drop is required.
+    budget = len(text) - 50
+    out = menu_emit._truncate_big_menu(text, budget=budget)
+    assert len(out) <= budget
+
+    import re
+
+    m = re.search(r"\[(\d+) rows truncated\]", out)
+    assert m
+    claimed = int(m.group(1))
+    assert claimed >= 1, "indicator claimed 0-row truncation — must drop AT LEAST one row"
+
+
+# ---------------------------------------------------------------------------
+# 20. _read_truncate_at — sidecar absent / null / int / malformed
+# ---------------------------------------------------------------------------
+
+
+def test_read_truncate_at_returns_none_when_sidecar_absent(tmp_path):
+    """No .meta.json sidecar → None (fall back to default heuristic)."""
+    menu = tmp_path / "00000000000000000001-cpv-test.menu.md"
+    menu.write_text("body\n")
+    assert menu_emit._read_truncate_at(menu) is None
+
+
+def test_read_truncate_at_returns_int_for_positive_value(tmp_path):
+    """``{"truncate_at": 5000}`` sidecar → int 5000."""
+    menu = tmp_path / "00000000000000000002-cpv-test.menu.md"
+    menu.write_text("body\n")
+    meta = menu_emit.meta_path_for(menu)
+    meta.write_text(json.dumps({"truncate_at": 5000}))
+    assert menu_emit._read_truncate_at(menu) == 5000
+
+
+def test_read_truncate_at_returns_sentinel_for_explicit_null(tmp_path):
+    """``{"truncate_at": null}`` sidecar → TRUNCATE_DISABLED sentinel."""
+    menu = tmp_path / "00000000000000000003-cpv-test.menu.md"
+    menu.write_text("body\n")
+    meta = menu_emit.meta_path_for(menu)
+    meta.write_text(json.dumps({"truncate_at": None}))
+    result = menu_emit._read_truncate_at(menu)
+    assert result is menu_emit.TRUNCATE_DISABLED
+
+
+def test_read_truncate_at_returns_none_for_malformed_sidecar(tmp_path):
+    """Garbage JSON / wrong type / negative int → None (defensive fallback)."""
+    menu = tmp_path / "00000000000000000004-cpv-test.menu.md"
+    menu.write_text("body\n")
+    meta = menu_emit.meta_path_for(menu)
+    # Garbage JSON.
+    meta.write_text("{not valid json")
+    assert menu_emit._read_truncate_at(menu) is None
+    # Wrong type at top level.
+    meta.write_text(json.dumps(["a", "list"]))
+    assert menu_emit._read_truncate_at(menu) is None
+    # No truncate_at key.
+    meta.write_text(json.dumps({"something_else": 42}))
+    assert menu_emit._read_truncate_at(menu) is None
+    # Negative int.
+    meta.write_text(json.dumps({"truncate_at": -1}))
+    assert menu_emit._read_truncate_at(menu) is None
+    # Zero.
+    meta.write_text(json.dumps({"truncate_at": 0}))
+    assert menu_emit._read_truncate_at(menu) is None
+    # Bool (subclass of int — must be rejected explicitly).
+    meta.write_text(json.dumps({"truncate_at": True}))
+    assert menu_emit._read_truncate_at(menu) is None
+
+
+# ---------------------------------------------------------------------------
+# 21. _compose_payload — truncate_at: null disables per-menu shaping
+# ---------------------------------------------------------------------------
+
+
+def test_compose_payload_truncate_at_null_skips_per_menu_shaping():
+    """With ``truncate_at:null`` sidecar, the menu passes through unshaped.
+
+    Without this PR, ``_compose_payload`` would shape ANY oversized menu
+    via ``_truncate_big_menu``. With ``truncate_at:null`` set, the per-
+    menu shaping step is bypassed — only the final 9500-char safety net
+    can clip the output. This pins the "fail loudly" semantics the user
+    asked for.
+    """
+    # Build 12 menus to force the overflow path. The newest 2 get the
+    # full-render treatment. We set ``truncate_at:null`` on the newest
+    # one and assert its content survives unshaped.
+    base = time.time_ns()
+    paths = []
+    # First 10: tiny menus that become title stubs.
+    for i in range(10):
+        body = f"Title-{i:02d}\nbody\n"
+        paths.append(_write_menu_file(body, ts_ns=base + i, slug=f"m{i:02d}"))
+    # Newest-1: a small menu that fits everywhere.
+    paths.append(_write_menu_file("Small\nbody\n", ts_ns=base + 10, slug="m10"))
+    # Newest-0: a LARGE menu with truncate_at:null. It would otherwise
+    # be passed to _truncate_big_menu since it exceeds per_new.
+    header_lines = "BIG-MENU-TITLE\n┏━━━┓\n┃ x ┃\n┡━━━┩\n"
+    body_rows = "".join(f"│ DISTINCT-ROW-MARKER-{i:03d} │\n" for i in range(200))
+    footer_lines = "└───┘\nbig-footer\n"
+    big_body = header_lines + body_rows + footer_lines
+    big_path = _write_menu_file(big_body, ts_ns=base + 11, slug="m11")
+    paths.append(big_path)
+    # Write the meta sidecar with truncate_at:null for the BIG one.
+    meta = menu_emit.meta_path_for(big_path)
+    meta.write_text(json.dumps({"truncate_at": None}))
+
+    text, _ = menu_emit._compose_payload(paths)
+
+    # With truncate_at:null, per-menu shaping is skipped. The final
+    # safety net (line_safe_truncate at 9500) still applies, so the
+    # output is bounded — but it's NOT the per-row-bisect form that
+    # _truncate_big_menu produces.
+    assert len(text) <= menu_emit.TOTAL_BUDGET
+    # The 'rows truncated' marker from _truncate_big_menu must NOT
+    # appear — that would prove per-menu shaping ran despite our null.
+    assert "rows truncated" not in text, (
+        "per-menu shaping ran despite truncate_at:null — the 'rows truncated' "
+        "marker is a fingerprint of _truncate_big_menu execution"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 22. _compose_payload — truncate_at: <int> overrides per_new
+# ---------------------------------------------------------------------------
+
+
+def test_compose_payload_truncate_at_int_overrides_per_new_cap():
+    """An explicit ``truncate_at: 800`` caps THIS menu's contribution at 800 chars."""
+    base = time.time_ns()
+    paths = []
+    # 10 small menus → title stubs.
+    for i in range(10):
+        paths.append(_write_menu_file(f"Title-{i:02d}\nbody\n", ts_ns=base + i, slug=f"m{i:02d}"))
+    # Newest-1: small filler.
+    paths.append(_write_menu_file("Small\nbody\n", ts_ns=base + 10, slug="m10"))
+    # Newest-0: LARGE menu with truncate_at=800. _truncate_big_menu
+    # gets called with budget=800 instead of per_new.
+    header_lines = "BIG\n┏━┓\n┃ ┃\n┡━┩\n"
+    body_rows = "".join(f"│ ROW-{i:03d} │\n" for i in range(300))
+    footer_lines = "└─┘\nfoot\n"
+    big = header_lines + body_rows + footer_lines
+    assert len(big) > 3000, "test prerequisite: big menu must be much larger than 800"
+    big_path = _write_menu_file(big, ts_ns=base + 11, slug="m11")
+    paths.append(big_path)
+    meta = menu_emit.meta_path_for(big_path)
+    meta.write_text(json.dumps({"truncate_at": 800}))
+
+    text, _ = menu_emit._compose_payload(paths)
+
+    # Final composition stays under the overall budget.
+    assert len(text) <= menu_emit.TOTAL_BUDGET
+    # The big menu's contribution was shaped via _truncate_big_menu
+    # because len(big) > 800 — confirm by presence of the indicator.
+    assert "rows truncated" in text
+
+    # The big menu's "BIG" header survives.
+    assert "BIG" in text
+
+
+# ---------------------------------------------------------------------------
+# 23. _compose_payload — truncate_at: <int> that menu already fits = pass-through
+# ---------------------------------------------------------------------------
+
+
+def test_compose_payload_truncate_at_int_passes_through_when_menu_already_fits():
+    """If ``truncate_at: 5000`` and the menu is 400 chars, it's emitted whole.
+
+    The override only kicks in when shaping is needed (``len(t) > override``).
+    """
+    base = time.time_ns()
+    paths = []
+    for i in range(10):
+        paths.append(_write_menu_file(f"T-{i:02d}\nbody\n", ts_ns=base + i, slug=f"m{i:02d}"))
+    paths.append(_write_menu_file("Small\nbody\n", ts_ns=base + 10, slug="m10"))
+
+    # Build a 400-char menu — small enough that any cap >= 400 leaves it intact.
+    body = "M-HEADER\n" + ("padding-row-data\n" * 20)  # ~350 chars
+    assert 200 < len(body) < 500
+    p = _write_menu_file(body, ts_ns=base + 11, slug="m11")
+    meta = menu_emit.meta_path_for(p)
+    meta.write_text(json.dumps({"truncate_at": 5000}))
+    paths.append(p)
+
+    text, _ = menu_emit._compose_payload(paths)
+    # The menu's content survived intact (no shaping needed).
+    assert "M-HEADER" in text
+    # All body rows present (every 'padding-row-data' line survived).
+    assert text.count("padding-row-data") == 20
+    assert len(text) <= menu_emit.TOTAL_BUDGET

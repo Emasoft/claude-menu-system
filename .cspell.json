@@ -1,0 +1,40 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+  "dictionaryDefinitions": [
+    {
+      "name": "project-words",
+      "path": "./.cspell-words.txt",
+      "description": "Project-local identifiers + stdlib/pytest API symbols + British-English variants. See file for the per-word rationale."
+    }
+  ],
+  "dictionaries": [
+    "project-words"
+  ],
+  "ignorePaths": [
+    "uv.lock",
+    "**/*.json",
+    ".venv/**",
+    ".git/**",
+    "node_modules/**",
+    "dist/**",
+    "build/**"
+  ],
+  "ignoreRegExpList": [
+    "ANSI_ESCAPE",
+    "ANSI_ESCAPE_SOURCE"
+  ],
+  "patterns": [
+    {
+      "name": "ANSI_ESCAPE",
+      "pattern": "\\x1b\\[[0-9;]*[A-Za-z]",
+      "description": "ANSI CSI escape sequences in test strings."
+    },
+    {
+      "name": "ANSI_ESCAPE_SOURCE",
+      "pattern": "\\\\\\\\?x1b\\[[0-9;]*[A-Za-z]",
+      "description": "Python-source form of ANSI CSI escapes (literal backslash-x1b in test docstrings)."
+    }
+  ]
+}

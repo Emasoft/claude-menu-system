@@ -27,9 +27,19 @@ runs whether the spec arrives via the skill, the test suite, or the
 
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from typing import Any
+
+# Ensure sibling modules resolve when this script runs from any cwd.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Single source of truth for reserved static keys (M/B/X/0/A). Importing
+# from menu_render means the validator and renderer can never disagree
+# about which keys bypass renumbering. menu_render has no reverse import
+# of menu_spec, so this is dependency-cycle-safe.
+from menu_render import _STATIC_KEYS
 
 # All renderer modes. Each maps to a renderer function in menu_render.
 MODES: frozenset[str] = frozenset(
@@ -100,6 +110,7 @@ def validate_top_level(spec: Any) -> dict[str, Any]:
     """Validate top-level frame + return alias-resolved copy.
 
     Required: spec_version (int), mode (str in MODES), plugin (str), slug (str).
+    Optional: truncate_at (positive int or null) — see ``_validate_truncate_at``.
     Unknown spec_version → warning, not error.
     """
     if not isinstance(spec, dict):
@@ -116,7 +127,41 @@ def validate_top_level(spec: Any) -> dict[str, Any]:
         raise SpecError(f"unknown mode {mode!r}; allowed: {sorted(MODES)}")
     _require(spec, "plugin", str)
     _require(spec, "slug", str)
+    _validate_truncate_at(spec)
     return spec
+
+
+def _validate_truncate_at(spec: dict[str, Any]) -> None:
+    """Validate the optional ``truncate_at`` field.
+
+    Contract:
+      - absent OR null  → emit hook uses the default budget (9500 chars)
+      - positive int    → emit hook caps THIS menu at that char count
+      - anything else   → SpecError
+
+    The field is consumed at emit time by ``menu_emit._compose_payload``
+    via the ``.meta.json`` sidecar; it does NOT affect render output.
+    A null value is an explicit "disable truncation for this menu" — the
+    emit hook will still apply its overall 9500-char queue cap, but the
+    per-menu shaping step is skipped so overflow fails loudly rather
+    than silently lopping body rows.
+    """
+    if "truncate_at" not in spec:
+        return
+    value = spec["truncate_at"]
+    if value is None:
+        return
+    # bool is a subclass of int — reject explicitly so True/False
+    # don't sneak through as 1/0.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SpecError(
+            f"field 'truncate_at' must be a positive int or null, got {type(value).__name__}"
+        )
+    if value <= 0:
+        raise SpecError(
+            f"field 'truncate_at' must be > 0 when set (got {value}); "
+            f"use null to disable truncation entirely"
+        )
 
 
 def validate_mode(spec: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +204,7 @@ def validate(spec: Any) -> dict[str, Any]:
 def _validate_menu(spec: dict[str, Any]) -> None:
     _require(spec, "header", str)
     rows = _require(spec, "rows", list)
+    seen_keys: dict[str, int] = {}
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise SpecError(f"menu row {i} must be an object, got {type(row).__name__}")
@@ -166,6 +212,30 @@ def _validate_menu(spec: dict[str, Any]) -> None:
             raise SpecError(f"menu row {i} missing 'key' (string)")
         if "label" not in row or not isinstance(row["label"], str):
             raise SpecError(f"menu row {i} missing 'label' (string)")
+        # Key shape enforcement — silent collisions in action_map cause
+        # the wrong route to fire when two rows share a key (last-write
+        # wins), so we reject duplicates / empties / overlong unknowns
+        # at spec-load time.
+        key = row["key"]
+        if key == "":
+            raise SpecError(f"menu row {i} has empty 'key' (must be a non-empty string)")
+        # Multi-char keys are only valid when they're in the static
+        # allow-list (e.g. future-proofing for new reserved nav letters).
+        # Anything else (e.g. "Esc", "Tab", "Enter") must be a single
+        # character — the renderer + the user's reply are character-level.
+        if len(key) != 1 and key not in _STATIC_KEYS:
+            raise SpecError(
+                f"menu row {i} has multi-character 'key' {key!r}; "
+                f"keys must be a single character unless they are in the "
+                f"reserved static set {sorted(_STATIC_KEYS)}"
+            )
+        if key in seen_keys:
+            raise SpecError(
+                f"menu row {i} duplicates 'key' {key!r} already used by row "
+                f"{seen_keys[key]}; every row must have a unique key (silent "
+                f"collision in action_map would otherwise overwrite earlier rows)"
+            )
+        seen_keys[key] = i
 
 
 def _validate_summary(spec: dict[str, Any]) -> None:
