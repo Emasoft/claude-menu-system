@@ -7,7 +7,7 @@
     {
       "header": "Summary",
       "body": [
-        "188 tests, 95%+ coverage, 0.8s runtime"
+        "green test suite, high coverage, sub-second runtime"
       ]
     },
     {

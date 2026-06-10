@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Public API for the render-menu skill body.
+"""Public API for queuing a menu — invoked directly via Bash.
 
-The haiku-fork skill body invokes this script with one argument — the
-path to the JSON spec file. The script:
+A caller (agent, command, or test) invokes this script with one
+argument — the path to the JSON spec file (the former render-menu skill
+was removed in v0.1.3; Bash-invoking this script is now the only path).
+The script:
 
   1. Reads + parses the JSON spec
   2. Validates the spec via ``menu_spec.validate``
@@ -18,10 +20,10 @@ Exit codes:
   3 — spec validation failure
   4 — write failure
 
-Why a script and not just a skill body: the skill body is haiku-rendered
-and read by an LLM. We want zero ambiguity about what gets written,
-which means a deterministic Python script doing the work. The skill
-just runs ``uv run --script menu_write.py <spec>`` and reports the path.
+Why a script and not inline LLM work: an LLM composing the queue file
+by hand leaves ambiguity about exactly what gets written. A deterministic
+Python script removes that — the caller just runs
+``python3 menu_write.py <spec>`` and reports the printed queue path.
 """
 
 from __future__ import annotations
@@ -88,10 +90,26 @@ def write_menu(spec_path_or_json: str) -> Path:
     return target
 
 
+_USAGE = (
+    "usage: menu_write.py <spec-path-or-json>\n"
+    "\n"
+    "Render + queue a menu from a JSON spec (a file path or inline JSON).\n"
+    "Prints the queue file path on success; writes a sibling .actions.json\n"
+    "mapping rendered key -> action_id.\n"
+    "\n"
+    "exit codes: 0 ok | 2 invalid-JSON/unreadable | 3 spec/render failure | 4 write failure"
+)
+
+
 def _cli(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: menu_write.py <spec-path-or-json>", file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
         return 2
+    # H1: recognize the help flags so ``--help`` prints usage cleanly instead
+    # of being mis-read as a spec path (which printed "invalid JSON" + exit 2).
+    if argv[1] in ("-h", "--help"):
+        print(_USAGE)
+        return 0
     try:
         path = write_menu(argv[1])
     except SystemExit as exc:

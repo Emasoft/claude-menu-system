@@ -19,7 +19,9 @@ spec is co-located with the assertions.
 
 from __future__ import annotations
 
+import json
 import warnings
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +30,7 @@ from menu_spec import (
     LATEST_SPEC_VERSION,
     MODES,
     SpecError,
+    _cli,
     validate,
     validate_mode,
     validate_top_level,
@@ -747,3 +750,175 @@ def test_multi_box_progress_confirm_and_helper_edge_cases() -> None:
     # so the dispatcher's else-branch fires.
     with pytest.raises(SpecError, match=r"no validator for mode 'ghost_mode'"):
         validate_mode(spoofed)
+
+
+# ---------------------------------------------------------------------------
+# M1 — _validate_menu rejects duplicate selectable keys
+# ---------------------------------------------------------------------------
+
+
+def _menu_spec(rows: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
+    """Build a minimal valid menu spec around the given rows."""
+    spec: dict[str, Any] = {
+        "spec_version": 1,
+        "mode": "menu",
+        "plugin": "cpv",
+        "slug": "dup-key",
+        "header": "Pick",
+        "rows": rows,
+    }
+    spec.update(extra)
+    return spec
+
+
+def test_static_keys_match_renderer_static_keys() -> None:
+    """M1 drift-guard: menu_spec._STATIC_KEYS must equal menu_render._STATIC_KEYS.
+
+    The two modules deliberately each carry their own copy (the validator
+    stays lightweight and does not import the renderer's transitive deps just
+    for two strings). This test fails fast if the copies ever diverge — a
+    divergence would make the dup-key validation disagree with what the
+    renderer actually treats as a static (non-renumbered) key.
+    """
+    import menu_render
+    import menu_spec
+
+    assert menu_spec._STATIC_KEYS == menu_render._STATIC_KEYS
+
+
+def test_validate_menu_rejects_duplicate_static_key() -> None:
+    """M1: two '0' rows would overwrite each other in the action_map -> SpecError."""
+    spec = _menu_spec(
+        [
+            {"key": "0", "action_id": "first-zero", "label": "First"},
+            {"key": "0", "action_id": "second-zero", "label": "Second"},
+        ]
+    )
+    with pytest.raises(SpecError, match=r"duplicate menu key '0'"):
+        validate(spec)
+
+
+def test_validate_menu_rejects_duplicate_key_when_renumber_false() -> None:
+    """M1: with renumber=False every authored key is literal, so any dup collides."""
+    spec = _menu_spec(
+        [
+            {"key": "x", "action_id": "a", "label": "A"},
+            {"key": "x", "action_id": "b", "label": "B"},
+        ],
+        renumber=False,
+    )
+    with pytest.raises(SpecError, match=r"duplicate menu key 'x'"):
+        validate(spec)
+
+
+def test_validate_menu_allows_repeated_numeric_keys_under_renumber() -> None:
+    """M1 correct-case: under renumber=True, repeated numeric keys are positional
+    placeholders that get renumbered, so they are NOT a collision -> validates."""
+    spec = _menu_spec(
+        [
+            {"key": "1", "action_id": "a", "label": "A"},
+            {"key": "1", "action_id": "b", "label": "B"},
+        ]
+    )
+    # Must not raise — the renderer renumbers these to 1/2.
+    result = validate(spec)
+    assert result["mode"] == "menu"
+
+
+def test_validate_menu_ignores_disabled_rows_for_dup_check() -> None:
+    """M1 correct-case: a disabled row is dropped before render, so its key sharing
+    a static value with a live row is NOT a collision."""
+    spec = _menu_spec(
+        [
+            {"key": "0", "action_id": "live", "label": "Live cancel"},
+            {"key": "0", "action_id": "dead", "label": "Dead", "disabled": True},
+        ]
+    )
+    result = validate(spec)
+    assert result["mode"] == "menu"
+
+
+def test_validate_menu_distinct_static_keys_validate() -> None:
+    """M1 correct-case: '0' and 'A' are distinct static keys — both literal, no clash."""
+    spec = _menu_spec(
+        [
+            {"key": "1", "action_id": "a", "label": "A"},
+            {"key": "0", "action_id": "cancel", "label": "Cancel"},
+            {"key": "A", "action_id": "all", "label": "All"},
+        ]
+    )
+    result = validate(spec)
+    assert result["mode"] == "menu"
+
+
+# ---------------------------------------------------------------------------
+# M5 / H2 — _cli: --help works, missing file is a clean error (no traceback)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_help_flag_prints_usage_and_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    """M5/H2: ``menu_spec.py --help`` prints usage and exits 0 (was a traceback)."""
+    for flag in ("--help", "-h"):
+        rc = _cli(["menu_spec.py", flag])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "usage: menu_spec.py" in out
+
+
+def test_cli_missing_file_returns_two_without_traceback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M5: a non-existent spec path is reported cleanly with exit 2 (was FileNotFoundError)."""
+    rc = _cli(["menu_spec.py", "/nonexistent/path/does-not-exist.json"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "cannot read" in err
+
+
+def test_cli_valid_spec_file_returns_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M5 correct-case: a readable valid spec file validates and prints 'ok' (exit 0)."""
+    spec_file = tmp_path / "good.json"
+    spec_file.write_text(
+        json.dumps(
+            {
+                "spec_version": 1,
+                "mode": "menu",
+                "plugin": "cpv",
+                "slug": "cli-ok",
+                "header": "Pick",
+                "rows": [{"key": "1", "action_id": "a", "label": "A"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = _cli(["menu_spec.py", str(spec_file)])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+
+def test_cli_invalid_json_file_returns_two(tmp_path: Path) -> None:
+    """M5 correct-case: a readable-but-malformed JSON file is reported as exit 2."""
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    rc = _cli(["menu_spec.py", str(bad)])
+    assert rc == 2
+
+
+def test_cli_duplicate_key_spec_returns_three(tmp_path: Path) -> None:
+    """M1+M5 integration: a dup-key spec file fails validation via the CLI (exit 3)."""
+    dup = tmp_path / "dup.json"
+    dup.write_text(
+        json.dumps(
+            _menu_spec(
+                [
+                    {"key": "0", "action_id": "a", "label": "A"},
+                    {"key": "0", "action_id": "b", "label": "B"},
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    rc = _cli(["menu_spec.py", str(dup)])
+    assert rc == 3

@@ -21,14 +21,15 @@ This module centralises:
 
 Keeping spec handling out of the renderer means the renderer stays
 pure (input dict in, rendered string out) and the same validation
-runs whether the spec arrives via the skill, the test suite, or the
-``/menu-render`` ad-hoc command.
+runs whether the spec arrives via a caller's Bash invocation, the test
+suite, or the ``/menu-render`` ad-hoc command.
 """
 
 from __future__ import annotations
 
 import sys
 import warnings
+from pathlib import Path
 from typing import Any
 
 # All renderer modes. Each maps to a renderer function in menu_render.
@@ -156,6 +157,13 @@ def validate(spec: Any) -> dict[str, Any]:
 # --- Per-mode validators ----------------------------------------------------
 
 
+# Keys the renderer always renders as-authored, never renumbering them.
+# Mirrors ``menu_render._STATIC_KEYS`` — kept in sync deliberately (one
+# concept, two modules: the validator must know which keys survive
+# renumbering to know which duplicates would actually collide).
+_STATIC_KEYS: frozenset[str] = frozenset({"0", "A"})
+
+
 def _validate_menu(spec: dict[str, Any]) -> None:
     _require(spec, "header", str)
     rows = _require(spec, "rows", list)
@@ -166,6 +174,31 @@ def _validate_menu(spec: dict[str, Any]) -> None:
             raise SpecError(f"menu row {i} missing 'key' (string)")
         if "label" not in row or not isinstance(row["label"], str):
             raise SpecError(f"menu row {i} missing 'label' (string)")
+
+    # M1: duplicate keys that survive into the rendered action_map silently
+    # drop an action route — the second row's action_id overwrites the first's,
+    # making the first unreachable. Reject those duplicates up front.
+    #
+    # Which keys actually collide depends on ``renumber``:
+    #   - renumber=True  (default): non-static numeric keys are rewritten to
+    #     positional values, so only the STATIC keys ('0','A') keep their
+    #     authored value and can collide.
+    #   - renumber=False: every authored key is rendered as-is, so ANY
+    #     duplicate among live rows collides.
+    # Disabled rows are dropped before rendering, so they never collide.
+    renumber = spec.get("renumber", True)
+    live_keys = [row["key"] for row in rows if not row.get("disabled", False)]
+    collidable = live_keys if not renumber else [k for k in live_keys if k in _STATIC_KEYS]
+    seen: set[str] = set()
+    for key in collidable:
+        if key in seen:
+            raise SpecError(
+                f"duplicate menu key {key!r} among selectable rows — the second "
+                f"row's action would silently overwrite the first. Use distinct "
+                f"keys (numeric keys are positional under renumber=True; '0'/'A' "
+                f"are always literal)."
+            )
+        seen.add(key)
 
 
 def _validate_summary(spec: dict[str, Any]) -> None:
@@ -245,14 +278,39 @@ def _validate_confirm(spec: dict[str, Any]) -> None:
 # --- Stdlib-friendly CLI hook for ad-hoc validation -------------------------
 
 
+_USAGE = (
+    "usage: menu_spec.py <spec-path|->\n"
+    "\n"
+    "Validate a menu JSON spec. Reads the spec from the given file path,\n"
+    "or from stdin when the path is '-'. Prints 'ok' on success.\n"
+    "\n"
+    "exit codes: 0 ok | 2 usage/unreadable/invalid-JSON | 3 spec-validation-failure"
+)
+
+
 def _cli(argv: list[str]) -> int:
     import json
 
     if len(argv) < 2:
-        print("usage: menu_spec.py <spec-path|->", file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
         return 2
     src = argv[1]
-    raw = sys.stdin.read() if src == "-" else open(src, encoding="utf-8").read()
+    # H2/M5: ``--help`` used to fall through to the spec read and crash with an
+    # uncaught FileNotFoundError. Recognize the help flags and print usage cleanly.
+    if src in ("-h", "--help"):
+        print(_USAGE)
+        return 0
+    if src == "-":
+        raw = sys.stdin.read()
+    else:
+        # M5: was a bare ``open(src).read()`` — leaked the file handle (ruff
+        # SIM115) and raised an uncaught traceback on a missing path. Use a
+        # context-managed read via Path and report read errors cleanly.
+        try:
+            raw = Path(src).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"menu_spec: cannot read {src}: {exc}", file=sys.stderr)
+            return 2
     try:
         spec = json.loads(raw)
     except json.JSONDecodeError as exc:

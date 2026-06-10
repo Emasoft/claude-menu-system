@@ -105,7 +105,15 @@ def test_render_menu_disabled_rows_dropped_and_kept_rows_renumber() -> None:
             {"key": "4", "action_id": "fourth", "label": "Keep fourth"},
         ],
     }
-    text, action_map = render_menu(spec, use_color=False)
+    # Dropping the disabled row 2 renumbers the surviving "3"->"2" and "4"->"3",
+    # which legitimately fires the M2 clobber warning (the literal keys change).
+    # Suppress it here — this test is about the renumber-after-drop result, not
+    # the warning (the warning itself is covered by the M2 tests above).
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", UserWarning)
+        text, action_map = render_menu(spec, use_color=False)
     plain = strip_ansi(text)
     # Skipped label must NOT appear at all.
     assert "Skip me" not in plain
@@ -167,6 +175,106 @@ def test_render_menu_renumber_false_preserves_original_keys() -> None:
     assert "Help" in plain
     # Map preserves originals.
     assert action_map == {"x": "exit", "h": "help", "9": "ninth"}
+
+
+# ---------------------------------------------------------------------------
+# 4b. render_menu — M1: a duplicate rendered key raises (defense in depth).
+# ---------------------------------------------------------------------------
+
+
+def test_render_menu_duplicate_static_key_raises() -> None:
+    """M1: two rows with the same static key '0' would overwrite each other -> raise.
+
+    Pre-fix, the second '0' row silently overwrote the first in action_map,
+    making the first row's action_id unreachable. The renderer now fails fast.
+    """
+    spec = {
+        "header": "Dup statics",
+        "rows": [
+            {"key": "0", "action_id": "first-zero", "label": "First zero"},
+            {"key": "0", "action_id": "second-zero", "label": "Second zero"},
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate menu key '0'"):
+        render_menu(spec, use_color=False)
+
+
+def test_render_menu_duplicate_key_renumber_false_raises() -> None:
+    """M1: with renumber=False, ANY duplicate authored key collides -> raise."""
+    spec = {
+        "header": "Dup custom keys",
+        "renumber": False,
+        "rows": [
+            {"key": "x", "action_id": "alpha", "label": "Alpha"},
+            {"key": "x", "action_id": "beta", "label": "Beta"},
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate menu key 'x'"):
+        render_menu(spec, use_color=False)
+
+
+def test_render_menu_duplicate_numeric_keys_renumbered_do_not_collide() -> None:
+    """M1 correct-case: under renumber=True, repeated numeric keys are positional,
+    so they get distinct rendered keys and BOTH actions stay reachable."""
+    spec = {
+        "header": "Repeated numeric keys",
+        "rows": [
+            {"key": "1", "action_id": "alpha", "label": "Alpha"},
+            {"key": "1", "action_id": "beta", "label": "Beta"},
+        ],
+    }
+    # renumber=True (default) rewrites both to positional 1, 2 — no collision.
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")  # M2 warning fires here; not under test
+        _text, action_map = render_menu(spec, use_color=False)
+    assert action_map == {"1": "alpha", "2": "beta"}
+
+
+# ---------------------------------------------------------------------------
+# 4c. render_menu — M2: renumber rewriting an explicit numeric key warns.
+# ---------------------------------------------------------------------------
+
+
+def test_render_menu_renumber_rewriting_explicit_key_warns() -> None:
+    """M2: an author key that disagrees with its positional value emits a warning.
+
+    rows keyed 1/3/2 render as 1/2/3 under renumber=True — the '3' row becomes
+    '2' and the '2' row becomes '3'. The clobber is now visible via a warning.
+    """
+    spec = {
+        "header": "Reordered keys",
+        "rows": [
+            {"key": "1", "action_id": "a", "label": "A"},
+            {"key": "3", "action_id": "b", "label": "B"},
+            {"key": "2", "action_id": "c", "label": "C"},
+        ],
+    }
+    with pytest.warns(UserWarning, match="renumber=True rewrote row key"):
+        _text, action_map = render_menu(spec, use_color=False)
+    # Positional rendering: rows map to 1/2/3 in row order regardless of the
+    # authored literal values.
+    assert action_map == {"1": "a", "2": "b", "3": "c"}
+
+
+def test_render_menu_renumber_matching_sequential_keys_no_warning() -> None:
+    """M2 correct-case: keys already in sequential 1..N order match their
+    positional value, so no clobber warning fires."""
+    spec = {
+        "header": "Already sequential",
+        "rows": [
+            {"key": "1", "action_id": "a", "label": "A"},
+            {"key": "2", "action_id": "b", "label": "B"},
+            {"key": "3", "action_id": "c", "label": "C"},
+        ],
+    }
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")  # any warning becomes an error
+        _text, action_map = render_menu(spec, use_color=False)
+    assert action_map == {"1": "a", "2": "b", "3": "c"}
 
 
 # ---------------------------------------------------------------------------
@@ -634,28 +742,36 @@ def test_render_menu_force_unicode_overrides_ascii_env_var(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 23. render_menu with rows=[] — header-only table with valid borders.
+# 23. render_menu with rows=[] — M4: a menu with no selectable rows raises.
 # ---------------------------------------------------------------------------
 
 
-def test_render_menu_empty_rows_produces_header_only_table_and_empty_map() -> None:
-    """Empty rows list -> table with header + borders but no data rows; action_map is empty."""
+def test_render_menu_empty_rows_raises_no_selectable_rows() -> None:
+    """M4: rows=[] has nothing to route to -> raise instead of rendering a dead box.
+
+    Pre-fix this rendered a header-only box plus a 'Type a number to choose:'
+    footer, prompting the user to pick from zero options. Now it fails fast so
+    menu_write.py:73 catches the ValueError and exits 3.
+    """
     spec = {
         "header": "Nothing yet",
         "rows": [],
-        "force_unicode": True,  # use heavy unicode glyphs for the corner asserts below
     }
-    text, action_map = render_menu(spec, use_color=False)
-    plain = strip_ansi(text)
-    # Header label and the column-header "#" still appear.
-    assert "Nothing yet" in plain
-    assert "#" in plain
-    # Borders are present (top + bottom + separator). Heavy style is the
-    # default, force_unicode=True so we get the unicode corners.
-    assert "┏" in plain  # top-left
-    assert "┘" in plain  # bottom-right (heavy uses └/┘ for bot corners)
-    # Empty map — no rows means no action_map entries.
-    assert action_map == {}
+    with pytest.raises(ValueError, match="no selectable rows"):
+        render_menu(spec, use_color=False)
+
+
+def test_render_menu_all_disabled_rows_raises_no_selectable_rows() -> None:
+    """M4: a menu whose every row is disabled also has nothing to route to -> raise."""
+    spec = {
+        "header": "All off",
+        "rows": [
+            {"key": "1", "action_id": "a", "label": "A", "disabled": True},
+            {"key": "2", "action_id": "b", "label": "B", "disabled": True},
+        ],
+    }
+    with pytest.raises(ValueError, match="no selectable rows"):
+        render_menu(spec, use_color=False)
 
 
 # ---------------------------------------------------------------------------

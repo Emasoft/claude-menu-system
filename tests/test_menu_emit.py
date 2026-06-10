@@ -379,6 +379,58 @@ def test_truncate_big_menu_emits_rows_truncated_indicator_when_over_budget():
 
 
 # ---------------------------------------------------------------------------
+# 9b. _truncate_big_menu — M3: the truncated-row count is EXACT (no double-count).
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_big_menu_indicator_count_equals_rows_dropped():
+    """M3: the '[N rows truncated]' integer equals exactly the body rows removed.
+
+    Pre-fix the count double-counted (``dropped + (len(body)-len(kept_body)) + 1``)
+    where ``dropped`` already equals ``len(body)-len(kept_body)`` — so the reported
+    value was roughly 2x+1 the truth (a 7-row drop printed "15 rows truncated").
+
+    The function partitions ``text.split("\\n")`` into header (first 4 lines),
+    footer (last 2 lines), and a middle "body". This test reconstructs that
+    same partition so the assertion is exact regardless of the menu shape:
+    reported count == (body lines) - (body lines surviving in the output).
+    """
+    import re
+
+    # No trailing newline — this matches a real rendered menu (footer is the
+    # last line). A trailing newline would inject an empty split element that
+    # shifts the footer/border slicing; production menus never have one.
+    header_lines = ["TITLE", "┏━━━━━━━━┓", "┃ HEADER ┃", "┡━━━━━━━━┩"]
+    body_lines = [f"│ row {i:03d} padding text...... │" for i in range(40)]
+    footer_lines = ["└────────┘", "footer text line"]
+    text = "\n".join(header_lines + body_lines + footer_lines)
+
+    out = menu_emit._truncate_big_menu(text, budget=300)
+    assert len(out) <= 300
+
+    m = re.search(r"…\[(\d+) rows truncated\]", out)
+    assert m is not None, f"no truncation indicator found in:\n{out}"
+    reported = int(m.group(1))
+
+    # Reconstruct the function's body partition (header_count=4, footer_count=2)
+    # and count how many of those body lines survived in the output.
+    out_lines = set(out.split("\n"))
+    body_surviving = sum(1 for line in body_lines if line in out_lines)
+    dropped = len(body_lines) - body_surviving
+
+    assert reported == dropped, (
+        f"reported={reported} but actually dropped {dropped} "
+        f"({len(body_lines)} body rows, {body_surviving} surviving)"
+    )
+    # Regression guard: the OLD buggy formula would report ~2*dropped (+/-1).
+    # The corrected count must be a single count of the dropped rows.
+    assert 0 < reported <= len(body_lines)
+    assert reported < 2 * dropped or dropped <= 1, (
+        f"reported={reported} looks like the old double-counted value for {dropped} drops"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 10. _truncate_big_menu — <6 lines → fallback to line_safe_truncate
 # ---------------------------------------------------------------------------
 

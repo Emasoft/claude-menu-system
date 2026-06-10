@@ -109,14 +109,16 @@ def _truncate_big_menu(text: str, budget: int) -> str:
         return line_safe_truncate(text, budget)
     # Iteratively drop body rows from the bottom until size fits.
     kept_body = body[:]
-    dropped = 0
     while kept_body:
-        indicator = f"  …[{dropped + len(body) - len(kept_body) + 1} rows truncated]"
+        # M3: the dropped-row count is exactly how many body rows we removed,
+        # i.e. ``len(body) - len(kept_body)``. The old formula added a separate
+        # ``dropped`` counter (which equals the same difference) plus a spurious
+        # +1, double-counting — a 7-row drop printed "15 rows truncated".
+        indicator = f"  …[{len(body) - len(kept_body)} rows truncated]"
         candidate = "\n".join(header + kept_body + [indicator] + footer)
         if len(candidate) <= budget:
             return candidate
         kept_body.pop()
-        dropped += 1
     # Body became empty — last resort.
     return line_safe_truncate(text, budget)
 

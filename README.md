@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 <!--BADGES-END-->
 
-The `AskQuestion` prompt is not good for a big number of choices.
+Claude Code's built-in option prompt is awkward for a large number of choices.
 
 Just run this command and you get a nice menu with as many entries as you need:
 
@@ -35,7 +35,7 @@ That's it. The menu appears in the user's terminal at the end of the
 current turn (a bundled `Stop` hook does the emit). The user's reply
 arrives in your next turn.
 
-Add as many rows as you need — no 4-option cap, no truncation.
+Add as many rows as you need — no option-count limit, no truncation.
 
 ## Install
 
@@ -63,13 +63,23 @@ python3 "$CMS_ROOT/scripts/menu_write.py" /tmp/my-menu.json
 ## Routing the user's reply
 
 `menu_write.py` also writes a sibling `.actions.json` file mapping
-rendered key → `action_id`. Read it in your next turn to route the
-reply:
+rendered key → `action_id`. It does **not** live at the spec path —
+it sits **beside the queued menu file** inside the session queue dir.
+`menu_write.py` prints that queue path to stdout, so capture it and
+derive the sidecar from it:
 
 ```bash
-ACTIONS=$(cat /tmp/my-menu.actions.json)
+QUEUE_PATH=$(python3 "$CLAUDE_PLUGIN_ROOT/scripts/menu_write.py" /tmp/my-menu.json)
+ACTIONS=$(cat "${QUEUE_PATH%.menu.md}.actions.json")
 # ACTIONS is JSON like: {"1":"scan","2":"validate","3":"publish","0":"cancel"}
 ```
+
+Read the sidecar **in the same turn** you queue the menu, and keep the
+mapping in mind. The bundled `Stop` hook emits the menu **and deletes
+both the menu file and its `.actions.json` sidecar** at turn-end — so
+the files are gone by the time the user's reply arrives in your next
+turn. The action map is small; read it now, remember it, and route the
+reply next turn from what you already know.
 
 ## Other modes
 
@@ -84,7 +94,7 @@ output:
 | `status_table` | Component / Status / Notes table (✓/✗/⚠/◐/○)                     |
 | `panel`        | Single titled box with body text                                 |
 | `multi_box`    | Stack of panels                                                  |
-| `progress`     | Title + bar + counter (`12/24 (50%)`)                            |
+| `progress`     | Title + bar + counter (`12/20 (60%)`)                            |
 | `confirm`      | Yes / No / Cancel prompt                                         |
 
 See `examples/` for one canonical spec per mode — copy and adjust.

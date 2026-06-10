@@ -17,9 +17,9 @@
       "notes": "3 events wired"
     },
     {
-      "label": "skills/render-menu",
+      "label": "hooks/menu_emit.py",
       "status": "ok",
-      "notes": "fork-skill present"
+      "notes": "Stop/SubagentStop/StopFailure wired"
     },
     {
       "label": "scripts/menu_render.py",
@@ -29,12 +29,12 @@
     {
       "label": "tests/",
       "status": "ok",
-      "notes": "188 tests, 95%+ coverage"
+      "notes": "test suite green"
     },
     {
       "label": "publish.py",
-      "status": "pending",
-      "notes": "deferred to v0.1.1"
+      "status": "ok",
+      "notes": "canonical publish pipeline"
     }
   ]
 }

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from typing import Any
 
 # Ensure sibling modules resolve when this script runs from any cwd.
@@ -213,8 +214,38 @@ def render_menu(spec: dict[str, Any], use_color: bool = False) -> tuple[str, dic
         else:
             rendered_key = str(next_num)
             next_num += 1
+            # M2: renumber silently rewrites author-chosen numeric keys to
+            # positional values. That is the documented behavior of
+            # ``renumber:true``, but an author who wrote literal 1/3/2 keys
+            # would not expect them re-rendered as 1/2/3 with no signal —
+            # warn so the clobber is visible.
+            if r["key"] != rendered_key:
+                warnings.warn(
+                    f"renumber=True rewrote row key {r['key']!r} -> {rendered_key!r}; "
+                    "numeric keys are positional placeholders under renumber "
+                    "(only '0'/'A' are preserved). Set renumber=False to keep "
+                    "literal keys.",
+                    stacklevel=2,
+                )
+        # M1 (defense in depth): a duplicate rendered key would overwrite an
+        # earlier row's action route in ``action_map``, silently making the
+        # first row's action_id unreachable. Fail fast instead. ``_validate_menu``
+        # already rejects duplicate authored keys; this guards the render path
+        # for callers who bypass validation (e.g. renumber=False with dup keys).
+        if rendered_key in action_map:
+            raise ValueError(
+                f"duplicate menu key {rendered_key!r}: row action "
+                f"{action_id!r} would overwrite {action_map[rendered_key]!r}"
+            )
         action_map[rendered_key] = action_id
         rendered_rows.append((rendered_key, r["label"]))
+
+    # M4: a menu with no live rows (rows:[] or every row disabled) would
+    # render a body-less box plus a "Type a number to choose:" footer,
+    # prompting the user to pick from zero options with nothing to route to.
+    # Reject it — menu_write.py:73 catches ValueError -> exit 3.
+    if not rendered_rows:
+        raise ValueError("menu has no selectable rows (all rows disabled or rows empty)")
 
     key_header = "#"
     width_key = (

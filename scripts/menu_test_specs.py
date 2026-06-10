@@ -2,8 +2,8 @@
 """Helper script — build canonical demo specs to a JSON file.
 
 Used by the `/menu-test` command to produce a deterministic demo spec
-on disk that the render-menu skill can consume. Also re-used by the
-test suite + examples gallery.
+on disk that ``menu_write.py`` (invoked directly via Bash) can consume.
+Also re-used by the test suite + examples gallery.
 
 Usage:
     python3 scripts/menu_test_specs.py <preset> <output-path>
@@ -98,10 +98,14 @@ PRESETS: dict[str, dict[str, Any]] = {
         "rows": [
             {"label": "plugin.json", "status": "ok", "notes": "valid manifest"},
             {"label": "hooks/hooks.json", "status": "ok", "notes": "3 events wired"},
-            {"label": "skills/render-menu", "status": "ok", "notes": "fork-skill present"},
+            {
+                "label": "hooks/menu_emit.py",
+                "status": "ok",
+                "notes": "Stop/SubagentStop/StopFailure wired",
+            },
             {"label": "scripts/menu_render.py", "status": "ok", "notes": "8 modes, 5 styles"},
-            {"label": "tests/", "status": "ok", "notes": "188 tests, 95%+ coverage"},
-            {"label": "publish.py", "status": "pending", "notes": "deferred to v0.1.1"},
+            {"label": "tests/", "status": "ok", "notes": "test suite green"},
+            {"label": "publish.py", "status": "ok", "notes": "canonical publish pipeline"},
         ],
     },
     "panel-message": {
@@ -111,7 +115,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "slug": "demo-panel",
         "header": "Welcome to claude-menu-system",
         "body": [
-            "A universal terminal-menu system for Claude Code plugins. A haiku-fork skill renders a JSON menu spec to a tempfile; the bundled Stop hook emits it as systemMessage at main-session turn end.",
+            "A universal terminal-menu system for Claude Code plugins. A caller Bash-invokes menu_write.py to render a JSON menu spec to a tempfile; the bundled Stop hook emits it as systemMessage at main-session turn end.",
             "",
             "The menu appears in the user terminal exactly when the user can type a reply — no opus tokens spent on copy-into-prose.",
         ],
@@ -125,7 +129,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "boxes": [
             {
                 "header": "Summary",
-                "body": ["188 tests, 95%+ coverage, 0.8s runtime"],
+                "body": ["green test suite, high coverage, sub-second runtime"],
             },
             {
                 "header": "Modes available",

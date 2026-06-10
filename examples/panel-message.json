@@ -5,7 +5,7 @@
   "slug": "demo-panel",
   "header": "Welcome to claude-menu-system",
   "body": [
-    "A universal terminal-menu system for Claude Code plugins. A haiku-fork skill renders a JSON menu spec to a tempfile; the bundled Stop hook emits it as systemMessage at main-session turn end.",
+    "A universal terminal-menu system for Claude Code plugins. A caller Bash-invokes menu_write.py to render a JSON menu spec to a tempfile; the bundled Stop hook emits it as systemMessage at main-session turn end.",
     "",
     "The menu appears in the user terminal exactly when the user can type a reply \u2014 no opus tokens spent on copy-into-prose."
   ],
