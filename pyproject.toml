@@ -60,7 +60,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests use unicode chars (×, ｗ, …) intentionally — they're test data.
+# RUF001-003: tests intentionally include confusable Unicode as test data.
 "tests/**" = ["B017", "RUF001", "RUF002", "RUF003"]
 # Renderer docstrings use × as multiplication sign in "category × severity matrix"
 # which is the standard math notation. Suppress the lint, not the meaning.
