@@ -1453,6 +1453,33 @@ def stage_bump(root: Path, new_ver: str, dry_run: bool) -> None:
         cprint(f"  {RED}Version bump failed.{NC}")
         sys.exit(1)
     cprint(f"  {GREEN}Version bumped to {new_ver}.{NC}")
+    _relock_uv_lock(root, new_ver, dry_run=dry_run)
+
+
+def _relock_uv_lock(root: Path, new_ver: str, dry_run: bool) -> None:
+    """Re-lock uv.lock so its recorded project version tracks the bump.
+
+    The bump rewrites pyproject.toml but uv.lock keeps its own copy of the root
+    project's version. Left stale, the NEXT `uv run` silently re-locks it, which
+    dirties the working tree and makes the following publish abort at the
+    clean-tree gate ("Working tree is dirty ... M uv.lock") — a release blocked by
+    the previous release's leftovers. Observed exactly this: uv.lock still said
+    0.1.6 while the shipped version was 0.2.0.
+
+    Best-effort by design: no uv.lock, or no `uv` on PATH, is not a release
+    blocker — the lockfile is regenerable.
+    """
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return
+    if not shutil.which("uv"):
+        cprint(f"  {YELLOW}uv not on PATH — skipping uv.lock re-lock.{NC}")
+        return
+    if dry_run:
+        cprint(f"  Would re-lock uv.lock to {new_ver}")
+        return
+    run(["uv", "lock"], cwd=root)
+    cprint(f"  {GREEN}uv.lock re-locked to {new_ver}.{NC}")
 
 
 def stage_update_badges(root: Path, old_ver: str, new_ver: str, dry_run: bool) -> None:
