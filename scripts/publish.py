@@ -1640,7 +1640,7 @@ def stage_commit_and_push(root: Path, new_ver: str, dry_run: bool) -> None:
     head_subject = _head_commit_message(root)
     tree_clean = _git_porcelain_clean(root)
     tag_exists = _local_tag_exists(root, tag)
-    dep_tag_exists = bool(dep_tag) and _local_tag_exists(root, dep_tag)
+    dep_tag_exists = dep_tag is not None and _local_tag_exists(root, dep_tag)
     push_refs = ["HEAD", tag] + ([dep_tag] if dep_tag else [])
 
     if dry_run:
