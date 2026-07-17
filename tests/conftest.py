@@ -35,6 +35,13 @@ def _menu_env_isolation(monkeypatch, tmp_path):
         "COLORTERM",
         "TERM_PROGRAM",
         "COLUMNS",
+        # Session-id env vars: clear the primary + the alternate spelling so the
+        # explicit CLAUDE_SESSION_ID default below is the ONLY session source in
+        # tests. session_id() checks CLAUDE_CODE_SESSION_ID FIRST, so a real
+        # Claude session's value would otherwise leak in and every test that
+        # expects "test-session" would get the real id instead.
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID_HOOK",
     ):
         monkeypatch.delenv(var, raising=False)
     # Set TERM to a real-looking value so should_use_color() returns True

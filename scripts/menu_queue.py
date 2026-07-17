@@ -10,11 +10,14 @@ route user replies.
 
 Session ID resolution order:
 
-1. ``CLAUDE_SESSION_ID`` env var — set by Claude Code in hook +
-   skill-fork process environments.
-2. Most-recent ``.jsonl`` file under the current project's
-   ``~/.claude/projects/<encoded-cwd>/`` directory — when env is not
-   set (rare but possible in test harnesses).
+1. ``CLAUDE_CODE_SESSION_ID`` env var — the name Claude Code actually
+   exports to command + hook subprocesses (verified on CC 2.1.212).
+   ``CLAUDE_SESSION_ID`` / ``CLAUDE_SESSION_ID_HOOK`` are also accepted
+   for forward/backward compat.
+2. Most-recent ``.jsonl`` file under THIS project's
+   ``~/.claude/projects/<encoded-cwd>/`` directory; if that dir has
+   none, the most-recent ``.jsonl`` globally — a best-effort fallback
+   for when env is not set (rare, mostly test harnesses).
 3. ``"unknown"`` bucket — last-resort fallback so the script never
    crashes. The emit hook will still pick up menus from this bucket
    but multi-session isolation is lost.
@@ -64,26 +67,48 @@ def queue_root() -> Path:
 
 
 def _resolve_from_transcripts() -> str | None:
-    """Last-resort: find the newest session transcript under ~/.claude/projects/."""
+    """Last-resort session id from transcript files under ~/.claude/projects/.
+
+    Prefer the newest ``.jsonl`` in THIS project's cwd folder: under concurrent
+    sessions the globally-newest transcript often belongs to a DIFFERENT project's
+    session, so cwd-scoping keeps the fallback at least in the right project. Only
+    if the cwd folder has no transcript do we fall back to the globally-newest one.
+    Now rarely reached (``CLAUDE_CODE_SESSION_ID`` resolves first) but must not
+    silently pick a sibling session when it is.
+    """
     home = Path.home() / ".claude" / "projects"
     if not home.is_dir():
         return None
-    # Claude Code encodes the project cwd by replacing path separators with hyphens.
-    # We don't strictly need to find the right project dir — just the newest .jsonl
-    # globally is good enough for the fallback.
-    candidates = []
+
+    def _newest_stem(proj_dir: Path) -> tuple[float, str] | None:
+        best: tuple[float, str] | None = None
+        for jsonl in proj_dir.glob("*.jsonl"):
+            try:
+                mtime = jsonl.stat().st_mtime
+            except OSError:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, jsonl.stem)
+        return best
+
+    # 1. cwd-scoped: Claude Code names the per-project folder after the cwd with
+    #    every non-alphanumeric char replaced by '-' (e.g. '/Users/me/Code/Foo'
+    #    -> '-Users-me-Code-Foo'). A cwd-encoding miss just falls through to (2).
+    cwd_dir = home / re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+    if cwd_dir.is_dir():
+        hit = _newest_stem(cwd_dir)
+        if hit:
+            return hit[1]
+
+    # 2. global-newest fallback (only when the cwd folder holds no transcript).
+    best: tuple[float, str] | None = None
     for proj_dir in home.iterdir():
         if not proj_dir.is_dir():
             continue
-        for jsonl in proj_dir.glob("*.jsonl"):
-            try:
-                candidates.append((jsonl.stat().st_mtime, jsonl.stem))
-            except OSError:
-                continue
-    if not candidates:
-        return None
-    candidates.sort(reverse=True)
-    return candidates[0][1]
+        hit = _newest_stem(proj_dir)
+        if hit and (best is None or hit[0] > best[0]):
+            best = hit
+    return best[1] if best else None
 
 
 def session_id(*, override: str | None = None) -> str:
@@ -91,15 +116,27 @@ def session_id(*, override: str | None = None) -> str:
 
     Order:
     1. ``override`` argument (tests use this).
-    2. ``CLAUDE_SESSION_ID`` env var.
-    3. ``CLAUDE_SESSION_ID_HOOK`` env var (alternative spelling
-       some Claude Code versions use).
-    4. Most-recent transcript under ``~/.claude/projects/``.
+    2. ``CLAUDE_CODE_SESSION_ID`` env var — the name Claude Code actually
+       exports to command + hook subprocesses (verified on CC 2.1.212). This
+       is the primary, authoritative source.
+    3. ``CLAUDE_SESSION_ID`` / ``CLAUDE_SESSION_ID_HOOK`` env vars — older /
+       alternative spellings, kept for forward/backward compat.
+    4. Most-recent transcript for THIS project's cwd (else globally) under
+       ``~/.claude/projects/``.
     5. ``"unknown"`` fallback.
+
+    WHY step 2 matters: without it none of the env names are ever set, so
+    resolution always fell to the transcript heuristic — which returns the
+    globally-newest ``.jsonl`` and is WRONG whenever a second Claude session is
+    active (the menu is queued under a sibling session's id and the requesting
+    session's emit hook never finds it, so nothing renders).
+    ``CLAUDE_CODE_SESSION_ID`` is inherited by the queue-writer subprocess and
+    matches the ``session_id`` the emit hook already reads from its Stop-hook
+    payload, so both sides agree on one id.
     """
     if override is not None:
         return _sanitize(override)
-    for key in ("CLAUDE_SESSION_ID", "CLAUDE_SESSION_ID_HOOK"):
+    for key in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_SESSION_ID_HOOK"):
         val = os.environ.get(key, "").strip()
         if val:
             return _sanitize(val)
