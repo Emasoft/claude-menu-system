@@ -119,6 +119,68 @@ def test_session_id_returns_unknown_when_no_env_and_no_transcripts(monkeypatch, 
     assert menu_queue.session_id() == "xyz-NEWER-session"
 
 
+def test_session_id_prefers_claude_code_session_id(monkeypatch):
+    """session_id() uses CLAUDE_CODE_SESSION_ID (the real CC var) over the older names."""
+    # Both set: the primary CLAUDE_CODE_SESSION_ID must win — this is the bug fix
+    # (Claude Code exports CLAUDE_CODE_SESSION_ID, not CLAUDE_SESSION_ID).
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "real-session")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "legacy-session")
+    assert menu_queue.session_id() == "real-session"
+    # Two-sided: without the primary var, the legacy CLAUDE_SESSION_ID governs —
+    # proving it was the primary var that produced the result above, not a constant.
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert menu_queue.session_id() == "legacy-session"
+
+
+def test_session_id_env_precedence_order(monkeypatch):
+    """Precedence CLAUDE_CODE_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_SESSION_ID_HOOK."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "primary")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "secondary")
+    monkeypatch.setenv("CLAUDE_SESSION_ID_HOOK", "tertiary")
+    assert menu_queue.session_id() == "primary"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert menu_queue.session_id() == "secondary"
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    assert menu_queue.session_id() == "tertiary"
+
+
+def test_resolve_from_transcripts_prefers_cwd_project(monkeypatch, tmp_path):
+    """The transcript fallback picks THIS project's cwd dir over a newer sibling.
+
+    Under concurrent sessions the globally-newest .jsonl usually belongs to a
+    DIFFERENT project's session, so cwd-scoping keeps the fallback in the right
+    project instead of silently borrowing a sibling session's id.
+    """
+    # No session env vars set → resolution reaches _resolve_from_transcripts.
+    # (conftest sets CLAUDE_SESSION_ID and already clears the other two.)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+    fake_home = tmp_path / "home"
+    projects = fake_home / ".claude" / "projects"
+    # Claude Code encodes cwd by replacing every non-alnum char with '-'.
+    monkeypatch.setattr(menu_queue.os, "getcwd", lambda: "/Users/me/Code/ProjA")
+    cwd_dir = projects / "-Users-me-Code-ProjA"
+    cwd_dir.mkdir(parents=True)
+    sibling = projects / "-Users-me-Code-OtherProj"
+    sibling.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    # cwd transcript is OLDER; the sibling is NEWER.
+    cwd_t = cwd_dir / "cwd-session.jsonl"
+    cwd_t.write_text("{}\n")
+    os.utime(cwd_t, (1000.0, 1000.0))
+    sib_t = sibling / "sibling-session.jsonl"
+    sib_t.write_text("{}\n")
+    os.utime(sib_t, (9000.0, 9000.0))
+
+    # The cwd project wins DESPITE being older — that is the whole point.
+    assert menu_queue.session_id() == "cwd-session"
+
+    # Two-sided: with NO transcript in the cwd project, fall back to global-newest.
+    cwd_t.unlink()
+    assert menu_queue.session_id() == "sibling-session"
+
+
 # ---------------------------------------------------------------------------
 # 5. _sanitize
 # ---------------------------------------------------------------------------
